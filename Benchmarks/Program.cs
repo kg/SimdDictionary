@@ -13,13 +13,18 @@ namespace Benchmarks {
         public static void Main (string[] args) {
             var test = new SimdDictionary<int, int>();
             var rng = new Random(1234);
+            int c = 4096, d = 4096 * 5;
             var keys = new List<int>();
-            for (int i = 0; i < 1024; i++)
+            for (int i = 0; i < c; i++)
                 keys.Add(rng.Next());
-            for (int i = 0; i < 1024; i++)
+            for (int i = 0; i < c; i++)
                 test.Add(keys[i], i * 2 + 1);
-            for (int i = 0; i < 1024; i++)
-                test.TryGetValue(keys[i], out _);
+
+            for (int j = 0; j < d; j++)
+                for (int i = 0; i < c; i++)
+                    if (!test.TryGetValue(keys[i], out _))
+                        throw new Exception();
+
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
         }
