@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
@@ -148,12 +149,12 @@ namespace SimdDictionary {
             if (typeof(K).IsValueType && (comparer == null)) {
                 var bucketCount = unchecked((uint)_buckets.Length);
                 var hashCode = unchecked((uint)key!.GetHashCode());
-                var suffix = Unsafe.AddByteOffset(ref Unsafe.As<uint, byte>(ref hashCode), 3);
+                var suffix = unchecked((byte)(hashCode >> 24));
                 if (suffix == 0)
                     suffix = 1;
-                var firstBucketIndex = hashCode % bucketCount;
-                ref var searchBucket = ref Unsafe.Add(ref _buckets[0], firstBucketIndex);
-                ref var searchKey = ref Unsafe.Add(ref _keys[0], firstBucketIndex * BucketSize);
+                var firstBucketIndex = unchecked(hashCode % bucketCount);
+                ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
+                ref var searchKey = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_keys), firstBucketIndex * BucketSize);
                 // An ideal searchVector would zero the last two slots, but it's faster to allow
                 //  occasional false positives than it is to zero the vector slots :/
                 Vector128<byte> searchVector = Vector128.Create(suffix),
@@ -166,7 +167,8 @@ namespace SimdDictionary {
                     // On average this improves over iterating from 0-count, but only a little bit
                     uint notEqualsElements = matchVector.ExtractMostSignificantBits();
                     int firstIndex = BitOperations.TrailingZeroCount(notEqualsElements);
-                    if (firstIndex < count) {
+                    // this if doesn't seem to help performance, and the for-loop termination does the same thing
+                    // if (firstIndex < count) {
                         // On average this is more expensive than just iterating from firstIndex to count...
                         //  calculating the last index is just that expensive
                         /*
@@ -179,10 +181,10 @@ namespace SimdDictionary {
 
                         for (int j = firstIndex; j < count; j++) {
                             if (EqualityComparer<K>.Default.Equals(firstSearchKey, key))
-                                return ref Unsafe.Add(ref values[0], (j + (i * BucketSize)));
+                                return ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(values), (j + (i * BucketSize)));
                             firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
                         }
-                    }
+                    // }
 
                     if (!IsCascaded(bucket))
                         return ref Unsafe.NullRef<V>();

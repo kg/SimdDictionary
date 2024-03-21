@@ -9,7 +9,7 @@ namespace Benchmarks {
     public abstract class DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
 
-        public int Size = 1024;
+        public int Size = 4096;
         public T Dict;
         public List<TKey> Keys, UnusedKeys;
         public List<TValue> Values;
