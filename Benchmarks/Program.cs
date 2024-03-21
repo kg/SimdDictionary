@@ -12,10 +12,14 @@ namespace Benchmarks {
     public class Program {
         public static void Main (string[] args) {
             var test = new SimdDictionary<int, int>();
+            var rng = new Random(1234);
+            var keys = new List<int>();
             for (int i = 0; i < 1024; i++)
-                test.Add(i, i * 2 + 1);
+                keys.Add(rng.Next());
             for (int i = 0; i < 1024; i++)
-                test.TryGetValue(i, out _);
+                test.Add(keys[i], i * 2 + 1);
+            for (int i = 0; i < 1024; i++)
+                test.TryGetValue(keys[i], out _);
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
         }
