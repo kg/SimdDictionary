@@ -14,11 +14,19 @@ namespace Benchmarks {
         public DictSuiteBase () {
             // Setup will initialize it.
             Unsafe.SkipInit(out Dict);
+            Unsafe.SkipInit(out Keys);
+            Unsafe.SkipInit(out UnusedKeys);
+            Unsafe.SkipInit(out Values);
         }
 
         [GlobalSetup]
         public virtual void Setup () {
-            Dict = Activator.CreateInstance<T>();
+            var ctor = typeof(T).GetConstructor(new [] { typeof(int) });
+            if (ctor == null)
+                throw new Exception("Ctor is missing????");
+            // HACK: Don't benchmark growth, since we don't have load factor management yet
+            // We initialize with Size items and then add Size more during insertion benchmark
+            Dict = (T)ctor.Invoke(new object[] { Size * 2 });
             Keys = new List<int>(Size);
             UnusedKeys = new List<int>(Size);
             Values = new List<int>(Size);
@@ -70,5 +78,23 @@ namespace Benchmarks {
 
     public class Lookup<T> : DictSuiteBase<T>
         where T : IDictionary<int, int> {
+
+        [Benchmark]
+        public void FindExisting () {
+            for (int i = 0; i < Size; i++) {
+                if (!Dict.TryGetValue(Keys[i], out var value))
+                    throw new Exception($"Key {Keys[i]} not found");
+                if (value != Values[i])
+                    throw new Exception($"Found value did not match: {value} != {Values[i]}");
+            }
+        }
+
+        [Benchmark]
+        public void FindMissing () {
+            for (int i = 0; i < Size; i++) {
+                if (Dict.TryGetValue(UnusedKeys[i], out _))
+                    throw new Exception("Found missing item");
+            }
+        }
     }
 }
