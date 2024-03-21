@@ -112,7 +112,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
-            capacity = RoundedCapacity(capacity);
+            capacity = RoundedCapacity(capacity * 150 / 100);
 
             if ((_Buckets != null) && (Capacity >= capacity))
                 return;
@@ -270,6 +270,7 @@ namespace SimdDictionary {
             return ref Unsafe.NullRef<V>();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal InsertFailureReason TryInsert (Vector128<byte>[] buckets, K[] keys, V[] values, ref K key, ref V value, bool ensureNotPresent) {
             if (ensureNotPresent)
                 if (!Unsafe.IsNullRef(ref FindValue(buckets, keys, values, ref key)))
@@ -308,8 +309,14 @@ namespace SimdDictionary {
             hashCode % (uint)buckets.Length;
 
         public V this[K key] { 
-            get => throw new NotImplementedException(); 
-            set => throw new NotImplementedException(); 
+            get {
+                if (!TryGetValue(key, out var result))
+                    throw new KeyNotFoundException();
+                else
+                    return result;
+            }
+            // FIXME: In-place modification
+            set => Add(key, value);
         }
 
         ICollection<K> IDictionary<K, V>.Keys => throw new NotImplementedException();
@@ -377,23 +384,31 @@ namespace SimdDictionary {
         IEnumerator IEnumerable.GetEnumerator () =>
             GetEnumerator();
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool Remove (K key) {
-            ref var valueSlot = ref FindValue(_Buckets, _Keys, _Values, ref key);
-            if (Unsafe.IsNullRef(ref valueSlot))
+            ref var oldValueSlot = ref FindValue(_Buckets, _Keys, _Values, ref key);
+            if (Unsafe.IsNullRef(ref oldValueSlot))
                 return false;
 
-            var valueOffsetBytes = Unsafe.ByteOffset(ref _Values[0], ref valueSlot);
-            var index = valueOffsetBytes / Unsafe.SizeOf<V>();
+            var valueOffsetBytes = Unsafe.ByteOffset(ref _Values[0], ref oldValueSlot);
+            var index = (int)(valueOffsetBytes / Unsafe.SizeOf<V>());
             var bucketIndex = index / BucketSize;
             var slotInBucket = index % BucketSize;
 
             ref var bucket = ref _Buckets[bucketIndex];
-            ref var keySlot = ref _Keys[index];
-            keySlot = default;
-            valueSlot = default;
-            // Zero the suffix in the bucket
-            bucket = bucket.WithElement((int)slotInBucket, (byte)0);
-            // TODO: Swap the last element down into the new empty space and reduce bucket count
+            var bucketCount = ItemCount(bucket);
+            ref var oldKeySlot = ref _Keys[index];
+            var newIndex = (bucketIndex * BucketSize) + bucketCount - 1;
+            ref var newKeySlot = ref _Keys[newIndex];
+            ref var newValueSlot = ref _Values[newIndex];
+            oldKeySlot = newKeySlot;
+            oldValueSlot = newValueSlot;
+            newKeySlot = default;
+            newValueSlot = default;
+            bucket = bucket.WithElement((int)slotInBucket, (byte)bucket[bucketCount - 1])
+                .WithElement((int)(bucketCount - 1), (byte)0)
+                .WithElement((int)BucketSize, (byte)(bucketCount - 1));
+
             _Count--;
             return true;
         }

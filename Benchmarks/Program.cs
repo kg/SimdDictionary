@@ -43,6 +43,8 @@ namespace Benchmarks {
 
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
+
+            Console.ReadLine();
         }
 
         public static IConfig GetConfig () =>

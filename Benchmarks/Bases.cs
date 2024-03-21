@@ -29,7 +29,7 @@ namespace Benchmarks {
                 throw new Exception("Ctor is missing????");
             // HACK: Don't benchmark growth, since we don't have load factor management yet
             // We initialize with Size items and then add Size more during insertion benchmark
-            Dict = (T)ctor.Invoke(new object[] { Size * 2 });
+            Dict = (T)ctor.Invoke(new object[] { Size });
             Keys = new List<TKey>(Size);
             UnusedKeys = new List<TKey>(Size);
             Values = new List<TValue>(Size);
@@ -73,9 +73,10 @@ namespace Benchmarks {
         }
 
         [Benchmark]
-        public void InsertNew () {
+        public void Fill () {
+            Dict.Clear();
             for (int i = 0; i < Size; i++)
-                Dict.TryAdd(UnusedKeys[i], Values[i]);
+                Dict.TryAdd(Keys[i], Values[i]);
         }
     }
 
@@ -104,33 +105,28 @@ namespace Benchmarks {
     public class Removal<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
 
-        // Initialized by IterationSetup
-        T IterationDict = default!;
-
-        [IterationSetup()]
-        public void IterationSetup () {
-            IterationDict = (T)Activator.CreateInstance(typeof(T), Dict);
-        }
-
         [Benchmark]
-        public void RemoveExisting () {
+        public void EmptyThenRefill () {
             for (int i = 0; i < Size; i++) {
-                if (!IterationDict.Remove(Keys[i]))
+                if (!Dict.Remove(Keys[i]))
                     throw new Exception($"Key {Keys[i]} not removed");
             }
 
-            if (IterationDict.Count != 0)
-                throw new Exception("Dict not empty");
+            for (int i = 0; i < Size; i++)
+                Dict.Add(Keys[i], Values[i]);
+
+            if (Dict.Count != Size)
+                throw new Exception("Dict size changed");
         }
 
         [Benchmark]
         public void RemoveMissing () {
             for (int i = 0; i < Size; i++) {
-                if (IterationDict.Remove(UnusedKeys[i]))
+                if (Dict.Remove(UnusedKeys[i]))
                     throw new Exception($"Key {UnusedKeys[i]} removed though it was present");
             }
 
-            if (IterationDict.Count != Size)
+            if (Dict.Count != Size)
                 throw new Exception("Dict size changed");
         }
     }
