@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34714.143
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimdDictionary", "SimdDictionary.csproj", "{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Benchmarks", "Benchmarks\Benchmarks.csproj", "{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {0F9CDFCE-E663-4585-81A1-07CC8A3BEA1B}
+	EndGlobalSection
+EndGlobal
