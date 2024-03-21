@@ -100,4 +100,38 @@ namespace Benchmarks {
             }
         }
     }
+
+    public class Removal<T> : DictSuiteBase<T>
+        where T : IDictionary<TKey, TValue> {
+
+        // Initialized by IterationSetup
+        T IterationDict = default!;
+
+        [IterationSetup()]
+        public void IterationSetup () {
+            IterationDict = (T)Activator.CreateInstance(typeof(T), Dict);
+        }
+
+        [Benchmark]
+        public void RemoveExisting () {
+            for (int i = 0; i < Size; i++) {
+                if (!IterationDict.Remove(Keys[i]))
+                    throw new Exception($"Key {Keys[i]} not removed");
+            }
+
+            if (IterationDict.Count != 0)
+                throw new Exception("Dict not empty");
+        }
+
+        [Benchmark]
+        public void RemoveMissing () {
+            for (int i = 0; i < Size; i++) {
+                if (IterationDict.Remove(UnusedKeys[i]))
+                    throw new Exception($"Key {UnusedKeys[i]} removed though it was present");
+            }
+
+            if (IterationDict.Count != Size)
+                throw new Exception("Dict size changed");
+        }
+    }
 }

@@ -12,9 +12,15 @@ namespace Benchmarks {
     public class BCLLookup : Lookup<Dictionary<long, long>> { 
     }
 
+    public class BCLRemoval : Removal<Dictionary<long, long>> { 
+    }
+
     public class SimdInsertion : Insertion<SimdDictionary<long, long>> {
     }
 
     public class SimdLookup : Lookup<SimdDictionary<long, long>> { 
+    }
+
+    public class SimdRemoval : Removal<SimdDictionary<long, long>> { 
     }
 }

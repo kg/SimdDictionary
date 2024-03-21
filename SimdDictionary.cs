@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    public class SimdDictionary<K, V> : IDictionary<K, V> {
+    public class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
         internal enum InsertFailureReason {
             None,
             AlreadyPresent = 1,
@@ -16,18 +16,61 @@ namespace SimdDictionary {
         public const int BucketSize = 14;
 
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
-            public KeyValuePair<K, V> Current => throw new NotImplementedException();
+            private int _bucketIndex, _valueIndex, _valueIndexLocal;
+            private Vector128<byte>[] _buckets;
+            private K[] _keys;
+            private V[] _values;
+            public KeyValuePair<K, V> Current {
+                get {
+                    if (_valueIndex < 0)
+                        throw new InvalidOperationException("No value");
+                    return new KeyValuePair<K, V>(_keys[_valueIndex], _values[_valueIndex]);
+                }
+            }
             object IEnumerator.Current => Current;
+
+            public Enumerator (SimdDictionary<K, V> dictionary) {
+                _bucketIndex = -1;
+                _valueIndex = -1;
+                _valueIndexLocal = BucketSize;
+                _buckets = dictionary._Buckets;
+                _keys = dictionary._Keys;
+                _values = dictionary._Values;
+            }
 
             public void Dispose () {
             }
 
             public bool MoveNext () {
-                throw new NotImplementedException();
+                _valueIndex++;
+                _valueIndexLocal++;
+
+                while (_bucketIndex < _buckets.Length) {
+                    if (_valueIndexLocal >= BucketSize) {
+                        _valueIndexLocal = 0;
+                        _bucketIndex++;
+                        if (_bucketIndex >= _buckets.Length)
+                            return false;
+                    }
+
+                    ref var bucket = ref _buckets[_bucketIndex];
+                    // We iterate over the whole bucket including empty slots to keep the indices in sync
+                    while (_valueIndexLocal < BucketSize) {
+                        var suffix = bucket[_valueIndexLocal];
+                        if (suffix != 0)
+                            return true;
+                        _valueIndexLocal++;
+                        _valueIndex++;
+                    }
+                }
+
+                return false;
             }
 
             public void Reset () {
-                throw new NotImplementedException();
+                _bucketIndex = -1;
+                _valueIndex = -1;
+                _valueIndexLocal = BucketSize;
             }
         }
 
@@ -57,18 +100,28 @@ namespace SimdDictionary {
             EnsureCapacity(capacity);
         }
 
+        public SimdDictionary (SimdDictionary<K, V> source) 
+            : this (source.Count, source.Comparer) {
+            // FIXME: Optimize this
+            foreach (var kvp in source)
+                Add(kvp.Key, kvp.Value);
+        }
+
+        static int RoundedCapacity (int capacity) =>
+            ((capacity + BucketSize - 1) / BucketSize) * BucketSize;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
-            capacity = ((capacity + BucketSize - 1) / BucketSize) * BucketSize;
+            capacity = RoundedCapacity(capacity);
 
             if ((_Buckets != null) && (Capacity >= capacity))
                 return;
 
-            int nextDoubling = (_Buckets == null)
+            int nextIncrement = (_Buckets == null)
                 ? capacity
-                : Capacity * 2;
+                : RoundedCapacity(Capacity * 150 / 100);
 
-            if (!TryResize(Math.Max(capacity, nextDoubling)))
+            if (!TryResize(Math.Max(capacity, nextIncrement)))
                 throw new Exception("Internal error: Failed to resize");
         }
 
@@ -139,7 +192,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal ref V FindValue (Vector128<byte>[] _buckets, K[] _keys, V[] values, K key) {
+        internal ref V FindValue (Vector128<byte>[] _buckets, K[] _keys, V[] values, ref K key) {
             var comparer = Comparer;
 
             if (typeof(K).IsValueType && (comparer == null)) {
@@ -219,7 +272,7 @@ namespace SimdDictionary {
 
         internal InsertFailureReason TryInsert (Vector128<byte>[] buckets, K[] keys, V[] values, ref K key, ref V value, bool ensureNotPresent) {
             if (ensureNotPresent)
-                if (!Unsafe.IsNullRef(ref FindValue(buckets, keys, values, key)))
+                if (!Unsafe.IsNullRef(ref FindValue(buckets, keys, values, ref key)))
                     return InsertFailureReason.AlreadyPresent;
 
             var hashCode = GetHashCode(key);
@@ -308,7 +361,7 @@ namespace SimdDictionary {
             (value?.Equals(item.Value) == true);
 
         public bool ContainsKey (K key) {
-            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Keys, _Values, key));
+            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Keys, _Values, ref key));
         }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
@@ -316,7 +369,7 @@ namespace SimdDictionary {
         }
 
         public Enumerator GetEnumerator () =>
-            new Enumerator();
+            new Enumerator(this);
 
         IEnumerator<KeyValuePair<K, V>> IEnumerable<KeyValuePair<K, V>>.GetEnumerator () =>
             GetEnumerator();
@@ -324,8 +377,26 @@ namespace SimdDictionary {
         IEnumerator IEnumerable.GetEnumerator () =>
             GetEnumerator();
 
-        public bool Remove (K key) =>
-            throw new NotImplementedException();
+        public bool Remove (K key) {
+            ref var valueSlot = ref FindValue(_Buckets, _Keys, _Values, ref key);
+            if (Unsafe.IsNullRef(ref valueSlot))
+                return false;
+
+            var valueOffsetBytes = Unsafe.ByteOffset(ref _Values[0], ref valueSlot);
+            var index = valueOffsetBytes / Unsafe.SizeOf<V>();
+            var bucketIndex = index / BucketSize;
+            var slotInBucket = index % BucketSize;
+
+            ref var bucket = ref _Buckets[bucketIndex];
+            ref var keySlot = ref _Keys[index];
+            keySlot = default;
+            valueSlot = default;
+            // Zero the suffix in the bucket
+            bucket = bucket.WithElement((int)slotInBucket, (byte)0);
+            // TODO: Swap the last element down into the new empty space and reduce bucket count
+            _Count--;
+            return true;
+        }
 
         bool ICollection<KeyValuePair<K, V>>.Remove (KeyValuePair<K, V> item) =>
             // FIXME: Check value
@@ -333,7 +404,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool TryGetValue (K key, out V value) {
-            ref var result = ref FindValue(_Buckets, _Keys, _Values, key);
+            ref var result = ref FindValue(_Buckets, _Keys, _Values, ref key);
             if (Unsafe.IsNullRef(ref result)) {
                 value = default!;
                 return false;
@@ -342,5 +413,8 @@ namespace SimdDictionary {
                 return true;
             }
         }
+
+        public object Clone () =>
+            new SimdDictionary<K, V>(this);
     }
 }

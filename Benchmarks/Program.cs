@@ -11,12 +11,12 @@ using SimdDictionary;
 namespace Benchmarks {
     public class Program {
         public static void Main (string[] args) {
-            var test = new SimdDictionary<int, int>();
+            var test = new SimdDictionary<long, long>();
             var rng = new Random(1234);
             int c = 4096, d = 4096 * 5;
-            var keys = new List<int>();
+            var keys = new List<long>();
             for (int i = 0; i < c; i++)
-                keys.Add(rng.Next());
+                keys.Add(rng.NextInt64());
             for (int i = 0; i < c; i++)
                 test.Add(keys[i], i * 2 + 1);
 
@@ -25,7 +25,21 @@ namespace Benchmarks {
                     if (!test.TryGetValue(keys[i], out _))
                         throw new Exception();
 
-            test.TryGetValue(keys[0], out _);
+            var copy = new SimdDictionary<long, long>(test);
+            for (int i = 0; i < c; i++)
+                if (!copy.TryGetValue(keys[i], out _))
+                    throw new Exception();
+
+            for (int i = 0; i < c; i++)
+                if (!test.Remove(keys[i]))
+                    throw new Exception();
+
+            for (int i = 0; i < c; i++)
+                if (test.TryGetValue(keys[i], out _))
+                    throw new Exception();
+
+            if (test.Count != 0)
+                throw new Exception();
 
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
