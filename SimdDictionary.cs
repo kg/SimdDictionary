@@ -126,12 +126,8 @@ namespace SimdDictionary {
 
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        internal static byte GetHashSuffix (uint hashCode) {
-            var suffix = Unsafe.AddByteOffset(ref Unsafe.As<uint, byte>(ref hashCode), 3);
-            if (suffix == 0)
-                suffix = 1;
-            return suffix;
-        }
+        internal static byte GetHashSuffix (uint hashCode) =>
+            unchecked((byte)((hashCode >> 24) | 1));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         internal uint GetHashCode (K key) {
@@ -149,9 +145,7 @@ namespace SimdDictionary {
             if (typeof(K).IsValueType && (comparer == null)) {
                 var bucketCount = unchecked((uint)_buckets.Length);
                 var hashCode = unchecked((uint)key!.GetHashCode());
-                var suffix = unchecked((byte)(hashCode >> 24));
-                if (suffix == 0)
-                    suffix = 1;
+                var suffix = unchecked((byte)((hashCode >> 24) | 1));
                 var firstBucketIndex = unchecked(hashCode % bucketCount);
                 ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
                 ref var searchKey = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_keys), firstBucketIndex * BucketSize);

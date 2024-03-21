@@ -25,6 +25,8 @@ namespace Benchmarks {
                     if (!test.TryGetValue(keys[i], out _))
                         throw new Exception();
 
+            test.TryGetValue(keys[0], out _);
+
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
         }
