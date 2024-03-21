@@ -126,11 +126,10 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         internal static byte GetHashSuffix (uint hashCode) {
-            var result = unchecked((byte)((hashCode & 0xFF000000) >> 24));
-            if (result == 0)
-                return 1;
-            else
-                return result;
+            var suffix = Unsafe.AddByteOffset(ref Unsafe.As<uint, byte>(ref hashCode), 3);
+            if (suffix == 0)
+                suffix = 1;
+            return suffix;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -143,21 +142,28 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal ref V FindValue (Vector128<byte>[] _buckets, K[] _keys, V[] values, uint firstBucketIndex, byte suffix, K key) {
-            ref var searchBucket = ref _buckets[firstBucketIndex];
-            ref var searchKey = ref _keys[firstBucketIndex * BucketSize];
-            // An ideal searchVector would zero the last two slots, but it's faster to allow
-            //  occasional false positives than it is to zero the vector slots :/
-            Vector128<byte> searchVector = Vector128.Create(suffix),
-                bucket;
+        internal ref V FindValue (Vector128<byte>[] _buckets, K[] _keys, V[] values, K key) {
             var comparer = Comparer;
 
             if (typeof(K).IsValueType && (comparer == null)) {
-                for (uint i = firstBucketIndex, l = (uint)_buckets.Length; i < l; i++) {
+                var bucketCount = unchecked((uint)_buckets.Length);
+                var hashCode = unchecked((uint)key!.GetHashCode());
+                var suffix = Unsafe.AddByteOffset(ref Unsafe.As<uint, byte>(ref hashCode), 3);
+                if (suffix == 0)
+                    suffix = 1;
+                var firstBucketIndex = hashCode % bucketCount;
+                ref var searchBucket = ref Unsafe.Add(ref _buckets[0], firstBucketIndex);
+                ref var searchKey = ref Unsafe.Add(ref _keys[0], firstBucketIndex * BucketSize);
+                // An ideal searchVector would zero the last two slots, but it's faster to allow
+                //  occasional false positives than it is to zero the vector slots :/
+                Vector128<byte> searchVector = Vector128.Create(suffix),
+                    bucket;
+                for (int i = (int)firstBucketIndex; i < bucketCount; i++) {
                     bucket = searchBucket;
                     int count = bucket[BucketSize];
                     
                     var matchVector = Vector128.Equals(bucket, searchVector);
+                    // On average this improves over iterating from 0-count, but only a little bit
                     uint notEqualsElements = matchVector.ExtractMostSignificantBits();
                     int firstIndex = BitOperations.TrailingZeroCount(notEqualsElements);
                     if (firstIndex < count) {
@@ -173,7 +179,7 @@ namespace SimdDictionary {
 
                         for (int j = firstIndex; j < count; j++) {
                             if (EqualityComparer<K>.Default.Equals(firstSearchKey, key))
-                                return ref values[j + (i * BucketSize)];
+                                return ref Unsafe.Add(ref values[0], (j + (i * BucketSize)));
                             firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
                         }
                     }
@@ -216,13 +222,13 @@ namespace SimdDictionary {
         }
 
         internal InsertFailureReason TryInsert (Vector128<byte>[] buckets, K[] keys, V[] values, ref K key, ref V value, bool ensureNotPresent) {
+            if (ensureNotPresent)
+                if (!Unsafe.IsNullRef(ref FindValue(buckets, keys, values, key)))
+                    return InsertFailureReason.AlreadyPresent;
+
             var hashCode = GetHashCode(key);
             var suffix = GetHashSuffix(hashCode);
             var bucketIndex = GetBucketIndex(buckets, hashCode);
-
-            if (ensureNotPresent)
-                if (!Unsafe.IsNullRef(ref FindValue(buckets, keys, values, bucketIndex, suffix, key)))
-                    return InsertFailureReason.AlreadyPresent;
 
             while (bucketIndex < buckets.Length) {
                 ref var newBucket = ref buckets[bucketIndex];
@@ -306,10 +312,7 @@ namespace SimdDictionary {
             (value?.Equals(item.Value) == true);
 
         public bool ContainsKey (K key) {
-            var hashCode = GetHashCode(key);
-            var suffix = GetHashSuffix(hashCode);
-            var firstBucketIndex = GetBucketIndex(_Buckets, hashCode);
-            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Keys, _Values, firstBucketIndex, suffix, key));
+            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Keys, _Values, key));
         }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
@@ -334,11 +337,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool TryGetValue (K key, out V value) {
-            var hashCode = GetHashCode(key);
-            var suffix = GetHashSuffix(hashCode);
-            var firstBucketIndex = GetBucketIndex(_Buckets, hashCode);
-
-            ref var result = ref FindValue(_Buckets, _Keys, _Values, firstBucketIndex, suffix, key);
+            ref var result = ref FindValue(_Buckets, _Keys, _Values, key);
             if (Unsafe.IsNullRef(ref result)) {
                 value = default!;
                 return false;
