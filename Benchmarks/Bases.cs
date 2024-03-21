@@ -2,14 +2,17 @@
 using System.Runtime.CompilerServices;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
+using TKey = System.Int64;
+using TValue = System.Int64;
 
 namespace Benchmarks {
     public abstract class DictSuiteBase<T>
-        where T : IDictionary<int, int> {
+        where T : IDictionary<TKey, TValue> {
 
         public int Size = 1024;
         public T Dict;
-        public List<int> Keys, UnusedKeys, Values;
+        public List<TKey> Keys, UnusedKeys;
+        public List<TValue> Values;
 
         public DictSuiteBase () {
             // Setup will initialize it.
@@ -27,16 +30,16 @@ namespace Benchmarks {
             // HACK: Don't benchmark growth, since we don't have load factor management yet
             // We initialize with Size items and then add Size more during insertion benchmark
             Dict = (T)ctor.Invoke(new object[] { Size * 2 });
-            Keys = new List<int>(Size);
-            UnusedKeys = new List<int>(Size);
-            Values = new List<int>(Size);
+            Keys = new List<TKey>(Size);
+            UnusedKeys = new List<TKey>(Size);
+            Values = new List<TValue>(Size);
 
-            var existingKeys = new HashSet<int>();
+            var existingKeys = new HashSet<TKey>();
             var rng = new Random(1234);
             for (int i = 0; i < Size; i++) {
-                int v = rng.Next();
+                var v = rng.NextInt64();
                 while (true) {
-                    int k = rng.Next();
+                    var k = rng.NextInt64();
                     if (!existingKeys.Contains(k)) {
                         existingKeys.Add(k);
                         Keys.Add(k);
@@ -61,7 +64,7 @@ namespace Benchmarks {
     }
 
     public class Insertion<T> : DictSuiteBase<T>
-        where T : IDictionary<int, int> {
+        where T : IDictionary<TKey, TValue> {
 
         [Benchmark]
         public void InsertExisting () {
@@ -77,7 +80,7 @@ namespace Benchmarks {
     }
 
     public class Lookup<T> : DictSuiteBase<T>
-        where T : IDictionary<int, int> {
+        where T : IDictionary<TKey, TValue> {
 
         [Benchmark]
         public void FindExisting () {

@@ -58,9 +58,6 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
-            // HACK: Maintain a decent load factor
-            capacity *= 2;
-
             capacity = ((capacity + BucketSize - 1) / BucketSize) * BucketSize;
 
             if ((_Buckets != null) && (Capacity >= capacity))
@@ -145,38 +142,41 @@ namespace SimdDictionary {
                 return unchecked((uint)comparer.GetHashCode(key!));
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal ref V FindValue (Vector128<byte>[] _buckets, K[] _keys, V[] values, uint firstBucketIndex, byte suffix, K key) {
             ref var searchBucket = ref _buckets[firstBucketIndex];
             ref var searchKey = ref _keys[firstBucketIndex * BucketSize];
-            var searchVector = Vector128.Create(suffix)
-                .WithElement(BucketSize, (byte)255)
-                .WithElement(BucketSize + 1, (byte)255);
+            // An ideal searchVector would zero the last two slots, but it's faster to allow
+            //  occasional false positives than it is to zero the vector slots :/
+            Vector128<byte> searchVector = Vector128.Create(suffix),
+                bucket;
             var comparer = Comparer;
 
             if (typeof(K).IsValueType && (comparer == null)) {
                 for (uint i = firstBucketIndex, l = (uint)_buckets.Length; i < l; i++) {
-                    var bucket = searchBucket;
+                    bucket = searchBucket;
                     int count = bucket[BucketSize];
                     
-                    if (count > 0)
-                    do {
-                        var matchVector = Vector128.Equals(bucket, searchVector);
-                        uint notEqualsElements = matchVector.ExtractMostSignificantBits();
-                        int firstIndex = BitOperations.TrailingZeroCount(notEqualsElements);
-                        if (firstIndex >= count)
-                            break;
-
+                    var matchVector = Vector128.Equals(bucket, searchVector);
+                    uint notEqualsElements = matchVector.ExtractMostSignificantBits();
+                    int firstIndex = BitOperations.TrailingZeroCount(notEqualsElements);
+                    if (firstIndex < count) {
+                        // On average this is more expensive than just iterating from firstIndex to count...
+                        //  calculating the last index is just that expensive
+                        /*
                         int matchCount = 32 - (firstIndex + BitOperations.LeadingZeroCount(notEqualsElements));
                         int lastIndex = firstIndex + matchCount;
+                        if (lastIndex > count)
+                            lastIndex = count;
+                        */
                         ref var firstSearchKey = ref Unsafe.Add(ref searchKey, firstIndex);
 
-                        for (int j = firstIndex; j < lastIndex; j++) {
+                        for (int j = firstIndex; j < count; j++) {
                             if (EqualityComparer<K>.Default.Equals(firstSearchKey, key))
                                 return ref values[j + (i * BucketSize)];
                             firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
                         }
-                    } while (false);
+                    }
 
                     if (!IsCascaded(bucket))
                         return ref Unsafe.NullRef<V>();
@@ -224,7 +224,7 @@ namespace SimdDictionary {
                 if (!Unsafe.IsNullRef(ref FindValue(buckets, keys, values, bucketIndex, suffix, key)))
                     return InsertFailureReason.AlreadyPresent;
 
-            while (bucketIndex < keys.Length) {
+            while (bucketIndex < buckets.Length) {
                 ref var newBucket = ref buckets[bucketIndex];
                 var localIndex = ItemCount(newBucket);
                 if (localIndex >= BucketSize) {
@@ -297,6 +297,7 @@ namespace SimdDictionary {
         public void Clear () {
             _Count = 0;
             Array.Clear(_Buckets);
+            Array.Clear(_Keys);
             Array.Clear(_Values);
         }
 
@@ -331,6 +332,7 @@ namespace SimdDictionary {
             // FIXME: Check value
             Remove(item.Key);
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool TryGetValue (K key, out V value) {
             var hashCode = GetHashCode(key);
             var suffix = GetHashSuffix(hashCode);
