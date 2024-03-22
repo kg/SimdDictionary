@@ -130,4 +130,15 @@ namespace Benchmarks {
                 throw new Exception("Dict size changed");
         }
     }
+
+    public class Resize<T> : DictSuiteBase<T>
+        where T : IDictionary<TKey, TValue>, new() {
+
+        [Benchmark]
+        public void CreateDefaultSizeAndFill () {
+            var temp = new T();
+            for (int i = 0; i < Size; i++)
+                temp.Add(Keys[i], Values[i]);
+        }
+    }
 }

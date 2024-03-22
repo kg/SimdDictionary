@@ -19,6 +19,10 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
+    public class BCLResize : Resize<Dictionary<long, long>> {
+    }
+
+    [MemoryDiagnoser()]
     public class SimdInsertion : Insertion<SimdDictionary<long, long>> {
     }
 
@@ -27,5 +31,9 @@ namespace Benchmarks {
 
     [MemoryDiagnoser()]
     public class SimdRemoval : Removal<SimdDictionary<long, long>> { 
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdResize : Resize<SimdDictionary<long, long>> {
     }
 }
