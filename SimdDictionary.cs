@@ -204,7 +204,7 @@ namespace SimdDictionary {
                         continue;
 
                     uint k = baseIndex + unchecked((uint)j);
-                    var insertResult = TryInsert(newBuckets, newValues, ref oldBucket.Keys[j], ref oldValues[k], false);
+                    var insertResult = TryInsert(newBuckets, newValues, oldBucket.Keys[j], ref oldValues[k], false);
                     if (insertResult != InsertFailureReason.None)
                         return newCount;
                     newCount++;
@@ -230,7 +230,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal ref V FindValue (Bucket[] _buckets, V[] values, ref K key) {
+        internal ref V FindValue (Bucket[] _buckets, V[] values, K key) {
             Vector128<byte> searchVector;
             var comparer = Comparer;
             var bucketCount = unchecked((uint)_buckets.Length);
@@ -267,7 +267,7 @@ namespace SimdDictionary {
                     searchBucket = ref Unsafe.Add(ref searchBucket, 1);
                 }
             } else {
-                var hashCode = unchecked((uint)key!.GetHashCode());
+                var hashCode = unchecked((uint)comparer.GetHashCode(key!));
                 var suffix = unchecked((byte)((hashCode >> 24) | SuffixSalt));
                 var firstBucketIndex = unchecked(hashCode & (bucketCount - 1));
                 ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
@@ -302,9 +302,9 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal InsertFailureReason TryInsert (Bucket[] buckets, V[] values, ref K key, ref V value, bool ensureNotPresent) {
+        internal InsertFailureReason TryInsert (Bucket[] buckets, V[] values, K key, ref V value, bool ensureNotPresent) {
             if (ensureNotPresent)
-                if (!Unsafe.IsNullRef(ref FindValue(buckets, values, ref key)))
+                if (!Unsafe.IsNullRef(ref FindValue(buckets, values, key)))
                     return InsertFailureReason.AlreadyPresent;
 
             var hashCode = GetHashCode(key);
@@ -363,7 +363,7 @@ namespace SimdDictionary {
             EnsureSpaceForNewItem();
 
         retry:
-            var insertResult = TryInsert(_Buckets, _Values, ref key, ref value, true);
+            var insertResult = TryInsert(_Buckets, _Values, key, ref value, true);
             switch (insertResult) {
                 case InsertFailureReason.None:
                     _Count++;
@@ -392,7 +392,7 @@ namespace SimdDictionary {
             (value?.Equals(item.Value) == true);
 
         public bool ContainsKey (K key) {
-            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Values, ref key));
+            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Values, key));
         }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
@@ -410,7 +410,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool Remove (K key) {
-            ref var oldValueSlot = ref FindValue(_Buckets, _Values, ref key);
+            ref var oldValueSlot = ref FindValue(_Buckets, _Values, key);
             if (Unsafe.IsNullRef(ref oldValueSlot))
                 return false;
 
@@ -444,7 +444,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool TryGetValue (K key, out V value) {
-            ref var result = ref FindValue(_Buckets, _Values, ref key);
+            ref var result = ref FindValue(_Buckets, _Values, key);
             if (Unsafe.IsNullRef(ref result)) {
                 value = default!;
                 return false;
