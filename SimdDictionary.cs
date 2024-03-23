@@ -12,14 +12,16 @@ namespace SimdDictionary {
             NeedToGrow = 2,
         }
 
-        public const int InitialCapacity = BucketSize * 4;
-        public const int BucketSize = 14;
+        public const int BucketSize = 14,
+            InitialCapacity = BucketSize * 4,
+            OversizePercentage = 150;
 
         [InlineArray(14)]
         internal struct KeyArray {
             public K Key;
         }
 
+        [StructLayout(LayoutKind.Sequential, Pack = 16)]
         internal struct Bucket {
             public Vector128<byte> Suffixes;
             public KeyArray Keys;
@@ -113,19 +115,25 @@ namespace SimdDictionary {
                 Add(kvp.Key, kvp.Value);
         }
 
-        static int RoundedCapacity (int capacity) =>
-            ((capacity + BucketSize - 1) / BucketSize) * BucketSize;
+        static int AdjustCapacity (int capacity) {
+            if (capacity < 1)
+                capacity = 1;
+            var bucketCount = ((capacity + BucketSize - 1) / BucketSize);
+            // Power-of-two bucket counts enable using & (count - 1) instead of mod count
+            var npot = BitOperations.RoundUpToPowerOf2((uint)bucketCount);
+            return (int)npot * BucketSize;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
-            capacity = RoundedCapacity(capacity * 150 / 100);
+            capacity = AdjustCapacity(capacity * OversizePercentage / 100);
 
             if ((_Buckets != null) && (Capacity >= capacity))
                 return;
 
             int nextIncrement = (_Buckets == null)
                 ? capacity
-                : RoundedCapacity(Capacity * 150 / 100);
+                : Capacity * 2;
 
             if (!TryResize(Math.Max(capacity, nextIncrement)))
                 throw new Exception("Internal error: Failed to resize");
@@ -203,7 +211,7 @@ namespace SimdDictionary {
                 var bucketCount = unchecked((uint)_buckets.Length);
                 var hashCode = unchecked((uint)key!.GetHashCode());
                 var suffix = unchecked((byte)((hashCode >> 24) | 1));
-                var firstBucketIndex = unchecked(hashCode % bucketCount);
+                var firstBucketIndex = unchecked(hashCode & (bucketCount - 1));
                 ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
                 // An ideal searchVector would zero the last two slots, but it's faster to allow
                 //  occasional false positives than it is to zero the vector slots :/
@@ -280,7 +288,7 @@ namespace SimdDictionary {
 
             var hashCode = GetHashCode(key);
             var suffix = GetHashSuffix(hashCode);
-            var bucketIndex = hashCode % buckets.Length;
+            var bucketIndex = hashCode & (buckets.Length - 1);
 
             while (bucketIndex < buckets.Length) {
                 ref var newBucket = ref buckets[bucketIndex];
