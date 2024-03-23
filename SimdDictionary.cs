@@ -18,6 +18,11 @@ namespace SimdDictionary {
             InitialCapacity = BucketSize * 4,
             OversizePercentage = 150;
 
+        // We need to make sure suffixes are never zero, and it's
+        //  more likely that a bad hash will collide at the top bit
+        //  than at the bottom (i.e. using an int/ptr as its own hash)
+        public const uint SuffixSalt = 0b10000000;
+
         [InlineArray(14)]
         internal struct KeyArray {
             public K Key;
@@ -27,6 +32,25 @@ namespace SimdDictionary {
         internal struct Bucket {
             public Vector128<byte> Suffixes;
             public KeyArray Keys;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void SetSuffix (int index, byte value) {
+                Suffixes = Suffixes.WithElement(index, value);
+            }
+
+            public byte Count {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => Suffixes[BucketSize];
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                set => Suffixes = Suffixes.WithElement(BucketSize, value);
+            }
+
+            public bool IsCascaded {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => Suffixes[BucketSize + 1] != 0;
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                set => Suffixes = Suffixes.WithElement(BucketSize + 1, value ? (byte)1 : (byte)0);
+            }
         }
 
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
@@ -187,17 +211,10 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        internal static byte ItemCount (Vector128<byte> suffixes) =>
-            suffixes[BucketSize];
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        internal static bool IsCascaded (Vector128<byte> suffixes) =>
-            suffixes[BucketSize + 1] != 0;
-
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         internal static byte GetHashSuffix (uint hashCode) =>
-            unchecked((byte)((hashCode >> 24) | 1));
+            // The bottom bits of the hash form the bucket index, so we
+            //  use the top bits of the hash as a suffix
+            unchecked((byte)((hashCode >> 24) | SuffixSalt));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         internal uint GetHashCode (K key) {
@@ -216,17 +233,16 @@ namespace SimdDictionary {
 
             if (typeof(K).IsValueType && (comparer == null)) {
                 var hashCode = unchecked((uint)key!.GetHashCode());
-                var suffix = unchecked((byte)((hashCode >> 24) | 1));
+                var suffix = unchecked((byte)((hashCode >> 24) | SuffixSalt));
                 var firstBucketIndex = unchecked(hashCode & (bucketCount - 1));
                 ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
                 // An ideal searchVector would zero the last two slots, but it's faster to allow
                 //  occasional false positives than it is to zero the vector slots :/
                 searchVector = Vector128.Create(suffix);
                 for (int i = (int)firstBucketIndex; i < bucketCount; i++) {
-                    suffixes = searchBucket.Suffixes;
-                    int count = suffixes[BucketSize];
+                    var count = searchBucket.Count;
                     
-                    var matchVector = Vector128.Equals(suffixes, searchVector);
+                    var matchVector = Vector128.Equals(searchBucket.Suffixes, searchVector);
                     // On average this improves over iterating from 0-count, but only a little bit
                     uint notEqualsElements = matchVector.ExtractMostSignificantBits();
                     // the first index is almost always the correct one
@@ -239,7 +255,7 @@ namespace SimdDictionary {
                         firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
                     }
 
-                    if (!IsCascaded(suffixes))
+                    if (!searchBucket.IsCascaded)
                         return ref Unsafe.NullRef<V>();
 
                     searchBucket = ref Unsafe.Add(ref searchBucket, 1);
@@ -269,7 +285,7 @@ namespace SimdDictionary {
                         firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
                     }
 
-                    if (!IsCascaded(suffixes))
+                    if (!searchBucket.IsCascaded)
                         return ref Unsafe.NullRef<V>();
 
                     searchBucket = ref Unsafe.Add(ref searchBucket, 1);
@@ -290,17 +306,16 @@ namespace SimdDictionary {
 
             while (bucketIndex < buckets.Length) {
                 ref var newBucket = ref buckets[bucketIndex];
-                var localIndex = ItemCount(newBucket.Suffixes);
+                var localIndex = newBucket.Count;
                 if (localIndex >= BucketSize) {
-                    newBucket.Suffixes = newBucket.Suffixes.WithElement(BucketSize + 1, (byte)1);
+                    newBucket.IsCascaded = true;
                     bucketIndex++;
                     continue;
                 }
 
                 ref var valueBucket = ref values[bucketIndex];
-                newBucket.Suffixes = newBucket.Suffixes
-                    .WithElement(BucketSize, (byte)(ItemCount(newBucket.Suffixes) + 1))
-                    .WithElement(localIndex, suffix);
+                newBucket.Count = unchecked((byte)(localIndex + 1));
+                newBucket.SetSuffix(localIndex, suffix);
 
                 var index = (bucketIndex * BucketSize) + localIndex;
                 newBucket.Keys[localIndex] = key;
@@ -399,7 +414,7 @@ namespace SimdDictionary {
             var slotInBucket = index % BucketSize;
 
             ref var bucket = ref _Buckets[bucketIndex];
-            var bucketCount = ItemCount(bucket.Suffixes);
+            var bucketCount = bucket.Count;
             ref var oldKeySlot = ref bucket.Keys[slotInBucket];
             var newCount = bucketCount - 1;
             var newIndex = (bucketIndex * BucketSize) + newCount;
@@ -409,9 +424,9 @@ namespace SimdDictionary {
             oldValueSlot = newValueSlot;
             newKeySlot = default;
             newValueSlot = default;
-            bucket.Suffixes = bucket.Suffixes.WithElement((int)slotInBucket, (byte)bucket.Suffixes[newCount])
-                .WithElement((int)(bucketCount - 1), (byte)0)
-                .WithElement((int)BucketSize, (byte)newCount);
+            bucket.SetSuffix(slotInBucket, bucket.Suffixes[newCount]);
+            bucket.SetSuffix(bucketCount - 1, 0);
+            bucket.Count = unchecked((byte)newCount);
 
             _Count--;
             return true;
