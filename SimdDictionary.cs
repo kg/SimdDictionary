@@ -33,23 +33,26 @@ namespace SimdDictionary {
             public Vector128<byte> Suffixes;
             public KeyArray Keys;
 
+            internal byte GetSlot (nuint index) =>
+                Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index);
+
+            // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void SetSuffix (int index, byte value) {
-                Suffixes = Suffixes.WithElement(index, value);
-            }
+            internal void SetSlot (nuint index, byte value) =>
+                Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index) = value;
 
             public byte Count {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => Suffixes[BucketSize];
+                get => GetSlot(BucketSize);
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                set => Suffixes = Suffixes.WithElement(BucketSize, value);
+                set => SetSlot(BucketSize, value);
             }
 
             public bool IsCascaded {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => Suffixes[BucketSize + 1] != 0;
+                get => GetSlot(BucketSize + 1) != 0;
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                set => Suffixes = Suffixes.WithElement(BucketSize + 1, value ? (byte)1 : (byte)0);
+                set => SetSlot(BucketSize + 1, value ? (byte)1 : (byte)0);
             }
         }
 
@@ -92,7 +95,7 @@ namespace SimdDictionary {
                     ref var bucket = ref _buckets[_bucketIndex];
                     // We iterate over the whole bucket including empty slots to keep the indices in sync
                     while (_valueIndexLocal < BucketSize) {
-                        var suffix = bucket.Suffixes[_valueIndexLocal];
+                        var suffix = bucket.GetSlot(unchecked((nuint)_valueIndexLocal));
                         if (suffix != 0)
                             return true;
                         _valueIndexLocal++;
@@ -194,9 +197,10 @@ namespace SimdDictionary {
 
             for (int i = 0; i < oldBuckets.Length; i++) {
                 ref var oldBucket = ref oldBuckets[i];
+                var oldBucketSuffixes = oldBucket.Suffixes;
                 var baseIndex = i * BucketSize;
                 for (int j = 0; j < BucketSize; j++) {
-                    if (oldBucket.Suffixes[j] == 0)
+                    if (oldBucketSuffixes[j] == 0)
                         continue;
 
                     int k = baseIndex + j;
@@ -315,7 +319,7 @@ namespace SimdDictionary {
 
                 ref var valueBucket = ref values[bucketIndex];
                 newBucket.Count = unchecked((byte)(localIndex + 1));
-                newBucket.SetSuffix(localIndex, suffix);
+                newBucket.SetSlot(localIndex, suffix);
 
                 var index = (bucketIndex * BucketSize) + localIndex;
                 newBucket.Keys[localIndex] = key;
@@ -424,8 +428,8 @@ namespace SimdDictionary {
             oldValueSlot = newValueSlot;
             newKeySlot = default;
             newValueSlot = default;
-            bucket.SetSuffix(slotInBucket, bucket.Suffixes[newCount]);
-            bucket.SetSuffix(bucketCount - 1, 0);
+            bucket.SetSlot(unchecked((nuint)slotInBucket), bucket.GetSlot(unchecked((nuint)newCount)));
+            bucket.SetSlot(unchecked((nuint)newCount), 0);
             bucket.Count = unchecked((byte)newCount);
 
             _Count--;
