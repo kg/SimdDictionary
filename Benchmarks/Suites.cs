@@ -23,6 +23,14 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
+    public class BCLCollisions : Collisions<Dictionary<Collider, Collider>> {
+    }
+
+    [MemoryDiagnoser()]
+    public class BCLIterate : Iterate<Dictionary<long, long>> {
+    }
+
+    [MemoryDiagnoser()]
     public class SimdInsertion : Insertion<SimdDictionary<long, long>> {
     }
 
@@ -35,5 +43,13 @@ namespace Benchmarks {
 
     [MemoryDiagnoser()]
     public class SimdResize : Resize<SimdDictionary<long, long>> {
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdCollisions : Collisions<SimdDictionary<Collider, Collider>> {
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdIterate : Iterate<SimdDictionary<long, long>> {
     }
 }

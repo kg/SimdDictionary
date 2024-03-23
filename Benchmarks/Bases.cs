@@ -141,4 +141,97 @@ namespace Benchmarks {
                 temp.Add(Keys[i], Values[i]);
         }
     }
+
+    public class Iterate<T> : DictSuiteBase<T>
+        where T : IDictionary<TKey, TValue>, new() {
+
+        [Benchmark]
+        public void EnumeratePairs () {
+            var temp = new List<KeyValuePair<TKey, TValue>>(Size);
+            foreach (var item in Dict)
+                temp.Add(item);
+            temp.Clear();
+        }
+    }
+
+    public class Collider {
+        public override int GetHashCode () => 0;
+        public override bool Equals (object? obj) => object.ReferenceEquals(this, obj);
+        public override string ToString () => $"Collider {base.GetHashCode()}";
+    }
+
+    public abstract class Collisions<T>
+        where T : IDictionary<Collider, Collider> {
+
+
+        public int Size = 1024;
+        public T Dict;
+        public List<Collider> Keys, UnusedKeys;
+
+        public Collisions () {
+            // Setup will initialize it.
+            Unsafe.SkipInit(out Dict);
+            Unsafe.SkipInit(out Keys);
+            Unsafe.SkipInit(out UnusedKeys);
+        }
+
+        [GlobalSetup]
+        public virtual void Setup () {
+            var ctor = typeof(T).GetConstructor(new [] { typeof(int) });
+            if (ctor == null)
+                throw new Exception("Ctor is missing????");
+            // HACK: Don't benchmark growth, since we don't have load factor management yet
+            // We initialize with Size items and then add Size more during insertion benchmark
+            Dict = (T)ctor.Invoke(new object[] { Size });
+            Keys = new List<Collider>(Size);
+            UnusedKeys = new List<Collider>(Size);
+
+            var existingKeys = new HashSet<Collider>();
+            for (int i = 0; i < Size; i++)
+                Keys.Add(new Collider());
+
+            for (int i = 0; i < Size; i++)
+                UnusedKeys.Add(new Collider());
+        }
+
+        [Benchmark]
+        public void AddSameRepeatedlyThenClear () {
+            for (int i = 0; i < Size; i++)
+                Dict.TryAdd(Keys[0], Keys[0]);
+
+            Dict.Clear();
+        }
+
+        [Benchmark]
+        public void FillThenClear () {
+            for (int i = 0; i < Size; i++)
+                Dict.TryAdd(Keys[i], Keys[i]);
+
+            Dict.Clear();
+        }
+
+        [Benchmark]
+        public void FindExistingWithCollisions () {
+            for (int i = 0; i < Size; i++)
+                Dict.TryAdd(Keys[i], Keys[i]);
+
+            for (int i = 0; i < Size; i++)
+                if (!Dict.ContainsKey(Keys[i]))
+                    throw new Exception($"Not found: {Keys[i]}");
+
+            Dict.Clear();
+        }
+
+        [Benchmark]
+        public void FindMissingWithCollisions () {
+            for (int i = 0; i < Size; i++)
+                Dict.TryAdd(Keys[i], Keys[i]);
+
+            for (int i = 0; i < Size; i++)
+                if (Dict.ContainsKey(UnusedKeys[i]))
+                    throw new Exception($"Not found: {UnusedKeys[i]}");
+
+            Dict.Clear();
+        }
+    }
 }
