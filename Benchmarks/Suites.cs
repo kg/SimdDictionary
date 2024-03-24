@@ -28,6 +28,8 @@ namespace Benchmarks {
 
     [MemoryDiagnoser()]
     public class BCLIterate : Iterate<Dictionary<long, long>> {
+        protected override IEnumerable<long> GetKeys () => Dict.Keys;
+        protected override IEnumerable<long> GetValues () => Dict.Values;
     }
 
     [MemoryDiagnoser()]
@@ -51,5 +53,7 @@ namespace Benchmarks {
 
     [MemoryDiagnoser()]
     public class SimdIterate : Iterate<SimdDictionary<long, long>> {
+        protected override IEnumerable<long> GetKeys () => Dict.Keys;
+        protected override IEnumerable<long> GetValues () => Dict.Values;
     }
 }

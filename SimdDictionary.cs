@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System.Buffers;
+using System.Collections;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -56,15 +57,169 @@ namespace SimdDictionary {
             }
         }
 
+        public struct KeyCollection : ICollection<K> {
+            public readonly SimdDictionary<K, V> Dictionary;
+
+            public struct Enumerator : IEnumerator<K> {
+                private int _bucketIndex, _valueIndex, _valueIndexLocal;
+                private Bucket _currentBucket;
+                private Bucket[] _buckets;
+                public K Current {
+                    get {
+                        if (_valueIndex < 0)
+                            throw new InvalidOperationException("No value");
+                        return _currentBucket.Keys[_valueIndexLocal];
+                    }
+                }
+                object IEnumerator.Current => Current;
+
+                public Enumerator (SimdDictionary<K, V> dictionary) {
+                    _bucketIndex = -1;
+                    _valueIndex = -1;
+                    _valueIndexLocal = (int)BucketSize;
+                    _buckets = dictionary._Buckets;
+                }
+
+                public void Dispose () {
+                }
+
+                public bool MoveNext () {
+                    _valueIndex++;
+                    _valueIndexLocal++;
+
+                    while (_bucketIndex < _buckets.Length) {
+                        if (_valueIndexLocal >= BucketSize) {
+                            _valueIndexLocal = 0;
+                            _bucketIndex++;
+                            if (_bucketIndex >= _buckets.Length)
+                                return false;
+                            _currentBucket = _buckets[_bucketIndex];
+                        }
+
+                        // We iterate over the whole bucket including empty slots to keep the indices in sync
+                        while (_valueIndexLocal < BucketSize) {
+                            var suffix = _currentBucket.GetSlot(unchecked((nuint)_valueIndexLocal));
+                            if (suffix != 0)
+                                return true;
+                            _valueIndexLocal++;
+                            _valueIndex++;
+                        }
+                    }
+
+                    return false;
+                }
+
+                public void Reset () {
+                    _bucketIndex = -1;
+                    _valueIndex = -1;
+                    _valueIndexLocal = (int)BucketSize;
+                }
+            }
+
+            internal KeyCollection (SimdDictionary<K, V> dictionary) {
+                Dictionary = dictionary;
+            }
+
+            int ICollection<K>.Count => Dictionary.Count;
+            bool ICollection<K>.IsReadOnly => true;
+
+            void ICollection<K>.Add (K item) =>
+                throw new NotImplementedException();
+
+            void ICollection<K>.Clear () =>
+                throw new NotImplementedException();
+
+            bool ICollection<K>.Contains (K item) =>
+                Dictionary.ContainsKey(item);
+
+            void ICollection<K>.CopyTo (K[] array, int arrayIndex) {
+                using (var e = GetEnumerator())
+                    while (e.MoveNext())
+                        array[arrayIndex++] = e.Current;
+            }
+
+            public Enumerator GetEnumerator () =>
+                new Enumerator(Dictionary);
+
+            IEnumerator<K> IEnumerable<K>.GetEnumerator () =>
+                GetEnumerator();
+
+            IEnumerator IEnumerable.GetEnumerator () =>
+                GetEnumerator();
+
+            bool ICollection<K>.Remove (K item) =>
+                throw new NotImplementedException();
+        }
+
+        public struct ValueCollection : ICollection<V> {
+            public readonly SimdDictionary<K, V> Dictionary;
+
+            public struct Enumerator : IEnumerator<V> {
+                internal SimdDictionary<K, V>.Enumerator Inner;
+
+                public V Current => Inner.Current.Value;
+                object IEnumerator.Current => Inner.Current.Value;
+
+                internal Enumerator (SimdDictionary<K, V> dictionary) {
+                    Inner = dictionary.GetEnumerator();
+                }
+
+                public void Dispose () =>
+                    Inner.Dispose();
+
+                public bool MoveNext () =>
+                    Inner.MoveNext();
+
+                public void Reset () =>
+                    Inner.Reset();
+            }
+
+            internal ValueCollection (SimdDictionary<K, V> dictionary) {
+                Dictionary = dictionary;
+            }
+
+            int ICollection<V>.Count => Dictionary.Count;
+            bool ICollection<V>.IsReadOnly => true;
+
+            void ICollection<V>.Add (V item) =>
+                throw new NotImplementedException();
+
+            void ICollection<V>.Clear () =>
+                throw new NotImplementedException();
+
+            // FIXME
+            bool ICollection<V>.Contains (V item) =>
+                throw new NotImplementedException();
+
+            void ICollection<V>.CopyTo (V[] array, int arrayIndex) {
+                using (var e = GetEnumerator())
+                    while (e.MoveNext())
+                        array[arrayIndex++] = e.Current;
+            }
+
+            public Enumerator GetEnumerator () =>
+                new Enumerator(Dictionary);
+
+            IEnumerator<V> IEnumerable<V>.GetEnumerator () =>
+                GetEnumerator();
+
+            IEnumerator IEnumerable.GetEnumerator () =>
+                GetEnumerator();
+
+            bool ICollection<V>.Remove (V item) =>
+                throw new NotImplementedException();
+        }
+
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
             private int _bucketIndex, _valueIndex, _valueIndexLocal;
+            private Bucket _currentBucket;
             private Bucket[] _buckets;
             private V[] _values;
             public KeyValuePair<K, V> Current {
                 get {
                     if (_valueIndex < 0)
                         throw new InvalidOperationException("No value");
-                    return new KeyValuePair<K, V>(_buckets[_bucketIndex].Keys[_valueIndexLocal], _values[_valueIndex]);
+                    return new KeyValuePair<K, V>(_currentBucket.Keys[_valueIndexLocal], _values[_valueIndex]);
                 }
             }
             object IEnumerator.Current => Current;
@@ -90,12 +245,12 @@ namespace SimdDictionary {
                         _bucketIndex++;
                         if (_bucketIndex >= _buckets.Length)
                             return false;
+                        _currentBucket = _buckets[_bucketIndex];
                     }
 
-                    ref var bucket = ref _buckets[_bucketIndex];
                     // We iterate over the whole bucket including empty slots to keep the indices in sync
                     while (_valueIndexLocal < BucketSize) {
-                        var suffix = bucket.GetSlot(unchecked((nuint)_valueIndexLocal));
+                        var suffix = _currentBucket.GetSlot(unchecked((nuint)_valueIndexLocal));
                         if (suffix != 0)
                             return true;
                         _valueIndexLocal++;
@@ -114,6 +269,8 @@ namespace SimdDictionary {
         }
 
         public readonly IEqualityComparer<K>? Comparer;
+        public readonly KeyCollection Keys;
+        public readonly ValueCollection Values;
         private int _Count;
         private Bucket[] _Buckets;
         private V[] _Values;
@@ -138,6 +295,8 @@ namespace SimdDictionary {
             else
                 Comparer = comparer ?? EqualityComparer<K>.Default;
             EnsureCapacity(capacity);
+            Keys = new KeyCollection(this);
+            Values = new ValueCollection(this);
         }
 
         public SimdDictionary (SimdDictionary<K, V> source) 
@@ -344,9 +503,8 @@ namespace SimdDictionary {
             set => Add(key, value);
         }
 
-        ICollection<K> IDictionary<K, V>.Keys => throw new NotImplementedException();
-
-        ICollection<V> IDictionary<K, V>.Values => throw new NotImplementedException();
+        ICollection<K> IDictionary<K, V>.Keys => Keys;
+        ICollection<V> IDictionary<K, V>.Values => Values;
 
         public int Count => _Count;
         public int Capacity => _Buckets.Length * (int)BucketSize;
@@ -396,7 +554,9 @@ namespace SimdDictionary {
         }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
-            throw new NotImplementedException();
+            using (var e = GetEnumerator())
+                while (e.MoveNext())
+                    array[arrayIndex++] = e.Current;
         }
 
         public Enumerator GetEnumerator () =>

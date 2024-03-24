@@ -9,10 +9,12 @@ namespace Benchmarks {
     public abstract class DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
 
-        public int Size = 4096;
         public T Dict;
         public List<TKey> Keys, UnusedKeys;
         public List<TValue> Values;
+
+        public virtual int Size => 8192;
+        public virtual bool Populate => true;
 
         public DictSuiteBase () {
             // Setup will initialize it.
@@ -29,7 +31,8 @@ namespace Benchmarks {
                 throw new Exception("Ctor is missing????");
             // HACK: Don't benchmark growth, since we don't have load factor management yet
             // We initialize with Size items and then add Size more during insertion benchmark
-            Dict = (T)ctor.Invoke(new object[] { Size });
+            if (Populate)
+                Dict = (T)ctor.Invoke(new object[] { Size });
             Keys = new List<TKey>(Size);
             UnusedKeys = new List<TKey>(Size);
             Values = new List<TValue>(Size);
@@ -44,7 +47,8 @@ namespace Benchmarks {
                         existingKeys.Add(k);
                         Keys.Add(k);
                         Values.Add(v);
-                        Dict.Add(k, v);
+                        if (Populate)
+                            Dict.Add(k, v);
                         break;
                     }
                 }
@@ -73,7 +77,7 @@ namespace Benchmarks {
         }
 
         [Benchmark]
-        public void Fill () {
+        public void ClearThenRefill () {
             Dict.Clear();
             for (int i = 0; i < Size; i++)
                 Dict.TryAdd(Keys[i], Values[i]);
@@ -106,7 +110,7 @@ namespace Benchmarks {
         where T : IDictionary<TKey, TValue> {
 
         [Benchmark]
-        public void EmptyThenRefill () {
+        public void RemoveItemsThenRefill () {
             for (int i = 0; i < Size; i++) {
                 if (!Dict.Remove(Keys[i]))
                     throw new Exception($"Key {Keys[i]} not removed");
@@ -134,6 +138,9 @@ namespace Benchmarks {
     public class Resize<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue>, new() {
 
+        public override bool Populate => false;
+        public override int Size => 1024 * 16;
+
         [Benchmark]
         public void CreateDefaultSizeAndFill () {
             var temp = new T();
@@ -142,14 +149,39 @@ namespace Benchmarks {
         }
     }
 
-    public class Iterate<T> : DictSuiteBase<T>
+    public abstract class Iterate<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue>, new() {
+
+        protected abstract IEnumerable<TKey> GetKeys ();
+        protected abstract IEnumerable<TValue> GetValues ();
 
         [Benchmark]
         public void EnumeratePairs () {
             var temp = new List<KeyValuePair<TKey, TValue>>(Size);
             foreach (var item in Dict)
                 temp.Add(item);
+            if (temp.Count != Dict.Count)
+                throw new Exception();
+            temp.Clear();
+        }
+
+        [Benchmark]
+        public void EnumerateKeys () {
+            var temp = new List<TKey>(Size);
+            foreach (var item in GetKeys())
+                temp.Add(item);
+            if (temp.Count != Dict.Count)
+                throw new Exception();
+            temp.Clear();
+        }
+
+        [Benchmark]
+        public void EnumerateValues () {
+            var temp = new List<TValue>(Size);
+            foreach (var item in GetValues())
+                temp.Add(item);
+            if (temp.Count != Dict.Count)
+                throw new Exception();
             temp.Clear();
         }
     }
@@ -162,7 +194,6 @@ namespace Benchmarks {
 
     public abstract class Collisions<T>
         where T : IDictionary<Collider, Collider> {
-
 
         public int Size = 1024;
         public T Dict;
@@ -186,7 +217,6 @@ namespace Benchmarks {
             Keys = new List<Collider>(Size);
             UnusedKeys = new List<Collider>(Size);
 
-            var existingKeys = new HashSet<Collider>();
             for (int i = 0; i < Size; i++)
                 Keys.Add(new Collider());
 

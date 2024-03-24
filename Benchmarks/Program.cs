@@ -25,6 +25,9 @@ namespace Benchmarks {
                     if (!test.TryGetValue(keys[i], out _))
                         throw new Exception();
 
+            var keyList = test.Keys.ToArray();
+            var valueList = test.Values.ToArray();
+
             var copy = new SimdDictionary<long, long>(test);
             for (int i = 0; i < c; i++)
                 if (!copy.TryGetValue(keys[i], out _))
