@@ -24,6 +24,7 @@ namespace SimdDictionary {
         //  than at the bottom (i.e. using an int/ptr as its own hash)
         public const uint SuffixSalt = 0b10000000;
 
+        // Must match BucketSize
         [InlineArray(14)]
         internal struct KeyArray {
             public K Key;

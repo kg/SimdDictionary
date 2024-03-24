@@ -5,21 +5,23 @@ using System.Text;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using SimdDictionary;
+using TKey = System.Int64;
+using TValue = System.Int64;
 
 namespace Benchmarks {
     [MemoryDiagnoser()]
-    public class BCLInsertion : Insertion<Dictionary<long, long>> {
+    public class BCLInsertion : Insertion<Dictionary<TKey, TValue>> {
     }
 
-    public class BCLLookup : Lookup<Dictionary<long, long>> { 
-    }
-
-    [MemoryDiagnoser()]
-    public class BCLRemoval : Removal<Dictionary<long, long>> { 
+    public class BCLLookup : Lookup<Dictionary<TKey, TValue>> { 
     }
 
     [MemoryDiagnoser()]
-    public class BCLResize : Resize<Dictionary<long, long>> {
+    public class BCLRemoval : Removal<Dictionary<TKey, TValue>> { 
+    }
+
+    [MemoryDiagnoser()]
+    public class BCLResize : Resize<Dictionary<TKey, TValue>> {
     }
 
     [MemoryDiagnoser()]
@@ -27,24 +29,24 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class BCLIterate : Iterate<Dictionary<long, long>> {
-        protected override IEnumerable<long> GetKeys () => Dict.Keys;
-        protected override IEnumerable<long> GetValues () => Dict.Values;
+    public class BCLIterate : Iterate<Dictionary<TKey, TValue>> {
+        protected override IEnumerable<TKey> GetKeys () => Dict.Keys;
+        protected override IEnumerable<TValue> GetValues () => Dict.Values;
     }
 
     [MemoryDiagnoser()]
-    public class SimdInsertion : Insertion<SimdDictionary<long, long>> {
+    public class SimdInsertion : Insertion<SimdDictionary<TKey, TValue>> {
     }
 
-    public class SimdLookup : Lookup<SimdDictionary<long, long>> { 
-    }
-
-    [MemoryDiagnoser()]
-    public class SimdRemoval : Removal<SimdDictionary<long, long>> { 
+    public class SimdLookup : Lookup<SimdDictionary<TKey, TValue>> { 
     }
 
     [MemoryDiagnoser()]
-    public class SimdResize : Resize<SimdDictionary<long, long>> {
+    public class SimdRemoval : Removal<SimdDictionary<TKey, TValue>> { 
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdResize : Resize<SimdDictionary<TKey, TValue>> {
     }
 
     [MemoryDiagnoser()]
@@ -52,8 +54,8 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class SimdIterate : Iterate<SimdDictionary<long, long>> {
-        protected override IEnumerable<long> GetKeys () => Dict.Keys;
-        protected override IEnumerable<long> GetValues () => Dict.Values;
+    public class SimdIterate : Iterate<SimdDictionary<TKey, TValue>> {
+        protected override IEnumerable<TKey> GetKeys () => Dict.Keys;
+        protected override IEnumerable<TValue> GetValues () => Dict.Values;
     }
 }
