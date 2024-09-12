@@ -38,6 +38,7 @@ namespace Benchmarks {
     public class SimdInsertion : Insertion<SimdDictionary<TKey, TValue>> {
     }
 
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     public class SimdLookup : Lookup<SimdDictionary<TKey, TValue>> { 
     }
 

@@ -265,35 +265,26 @@ namespace SimdDictionary {
             //  use the top bits of the hash as a suffix
             unchecked((byte)((hashCode >> 24) | SuffixSalt));
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal int GetBucketIndex (uint hashCode) =>
             unchecked((int)(hashCode & (uint)(_Buckets.Length - 1)));
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal int FindFirstMatchingSuffix (Vector128<byte> haystack, byte needle) {
-            int result = 32;
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal int ScanBucket (InternalEnumerator enumerator, K needle, byte suffix) {
+            int index;
             if (Sse2.IsSupported) {
-                result = BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(needle), haystack)));
+                index = BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), enumerator.Bucket.Vector)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
-                var matchVector = AdvSimd.CompareEqual(Vector128.Create(needle), haystack);
+                var matchVector = AdvSimd.CompareEqual(Vector128.Create(suffix), enumerator.Bucket.Vector);
                 var masked = AdvSimd.And(matchVector, Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
                 var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
                     (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
-                result = BitOperations.TrailingZeroCount(bits);
+                index = BitOperations.TrailingZeroCount(bits);
             } else
                 throw new NotImplementedException();
 
-            return result;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int ScanBucket (InternalEnumerator enumerator, K needle, byte suffix) {
-            int count = enumerator.Bucket.Count,
-                index = FindFirstMatchingSuffix(enumerator.Bucket.Vector, suffix);
-
-            for (; index < count; index++) {
+            for (int count = enumerator.Bucket.Count; index < count; index++) {
                 if (Comparer.Equals(enumerator.Key(this, index), needle))
                     return index;
             }
@@ -303,6 +294,7 @@ namespace SimdDictionary {
                 : (int)ScanBucketResult.NoOverflow;
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
         internal void AdjustCascadeCounts (int firstBucketIndex, int lastBucketIndex, bool increase) {
             var enumerator = new InternalEnumerator(this, firstBucketIndex);
             do {
@@ -346,7 +338,7 @@ namespace SimdDictionary {
             return ref Unsafe.NullRef<V>();
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         internal InsertResult TryInsert (K key, V value, InsertMode mode) {
             // FIXME: Load factor
             if ((_Keys == null) || (_Count >= _Keys.Length))
@@ -463,7 +455,7 @@ namespace SimdDictionary {
         IEnumerator IEnumerable.GetEnumerator () =>
             GetEnumerator();
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public bool Remove (K key) {
             if (_Count == 0)
                 return false;
@@ -508,7 +500,7 @@ namespace SimdDictionary {
             // FIXME: Check value
             Remove(item.Key);
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
             ref var result = ref FindValue(key);
             if (Unsafe.IsNullRef(ref result)) {

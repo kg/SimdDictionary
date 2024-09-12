@@ -95,9 +95,9 @@ namespace Benchmarks {
         public void FindExisting () {
             for (int i = 0; i < Size; i++) {
                 if (!Dict.TryGetValue(Keys[i], out var value))
-                    throw new Exception($"Key {Keys[i]} not found");
+                    throw new Exception("Key {Keys[i]} not found");
                 if (value != Values[i])
-                    throw new Exception($"Found value did not match: {value} != {Values[i]}");
+                    throw new Exception("Found value did not match: {value} != {Values[i]}");
             }
         }
 

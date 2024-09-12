@@ -14,7 +14,7 @@ namespace Benchmarks {
     public class Program {
         public static void Main (string[] args) {
             var rng = new Random(1234);
-            int c = 4096, d = 4096 * 5;
+            int c = 4096, d = 4096 * 100;
             List<long> keys = new (c),
                 values = new (c);
             var test = new SimdDictionary<long, long>(c);
@@ -68,7 +68,7 @@ namespace Benchmarks {
 
         public static IConfig GetConfig () =>
             DefaultConfig.Instance
-                .WithOption(ConfigOptions.JoinSummary, true)
-                .AddJob(Job.Default.WithRuntime(NativeAotRuntime.Net80));
+                // .AddJob(Job.Default.WithRuntime(NativeAotRuntime.Net80))
+                .WithOption(ConfigOptions.JoinSummary, true);
     }
 }
