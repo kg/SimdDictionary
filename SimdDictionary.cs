@@ -71,6 +71,7 @@ namespace SimdDictionary {
 
             public readonly int InitialBucketIndex;
             public int BucketIndex, ElementIndex;
+            // FIXME: We could potentially optimize MoveNext by getting rid of this
             public ref Bucket Bucket;
 
             /// <summary>
@@ -84,7 +85,7 @@ namespace SimdDictionary {
                     throw new NullReferenceException();
             }
 
-            public InternalEnumerator (Span<Bucket> buckets, Span<K> keys, int bucketIndex) {
+            private InternalEnumerator (Span<Bucket> buckets, Span<K> keys, int bucketIndex) {
                 Buckets = buckets;
                 Keys = keys;
                 InitialBucketIndex = BucketIndex = bucketIndex;
@@ -111,9 +112,12 @@ namespace SimdDictionary {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             internal readonly int ScanBucket (IEqualityComparer<K>? comparer, K needle, byte suffix) {
+                // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
                 var bucket = Bucket;
 
                 int index;
+                // We create the search vector on the fly with Vector128.Create(suffix) because passing it as a param from outside
+                //  seems to cause RyuJIT to generate inferior code instead of flowing it through a register even when inlined
                 if (Sse2.IsSupported) {
                     index = BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket)));
                 } else if (AdvSimd.Arm64.IsSupported) {
@@ -124,11 +128,14 @@ namespace SimdDictionary {
                         (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
                     index = BitOperations.TrailingZeroCount(bits);
                 } else
+                    // FIXME: Scalar implementation like dn_simdhash's
                     throw new NotImplementedException();
 
-                // We need to duplicate the initialization logic and move it inside the if,
-                //  otherwise count gets spilled to the stack.
+                // We need to duplicate the loop header logic and move it inside the if, otherwise
+                //  count gets spilled to the stack.
                 if (typeof(K).IsValueType && (comparer == null)) {
+                    // We do this instead of a for-loop so we can skip ReadKey when there's no match,
+                    //  which improves performance for missing items and/or hash collisions
                     int count = bucket[CountSlot];
                     if (index >= count)
                         goto no_match;
@@ -186,6 +193,10 @@ namespace SimdDictionary {
             public ref V Value (SimdDictionary<K, V> self, int index) =>
                 ref self._Values[ElementIndex + index];
 
+            /// <summary>
+            /// Creates a fully-initialized InternalEnumerator pointed at the correct bucket for the specified hashcode.
+            /// You don't need to call MoveNext before using it!
+            /// </summary>
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static InternalEnumerator ForHashCode (SimdDictionary<K, V> self, uint hashCode) {
                 var buckets = (Span<Bucket>)self._Buckets;
@@ -348,27 +359,11 @@ namespace SimdDictionary {
 
             do {
                 var indexInBucket = enumerator.ScanBucket(comparer, needle, suffix);
-                switch (indexInBucket) {
-                    case 0:
-                    case 1:
-                    case 2:
-                    case 3:
-                    case 4:
-                    case 5:
-                    case 6:
-                    case 7:
-                    case 8:
-                    case 9:
-                    case 10:
-                    case 11:
-                    case 12:
-                    case 13:
-                        return ref enumerator.Value(this, indexInBucket);
-                    case (int)ScanBucketResult.NoOverflow:
-                        return ref Unsafe.NullRef<V>();
-                    default:
-                        continue;
-                }
+                // FIXME: Find a way to do a single comparison here instead of 2? Not sure if there's a good option.
+                if (indexInBucket < BucketSizeI)
+                    return ref enumerator.Value(this, indexInBucket);
+                else if (indexInBucket == (int)ScanBucketResult.NoOverflow)
+                    return ref Unsafe.NullRef<V>();
             } while (enumerator.MoveNext());
 
             return ref Unsafe.NullRef<V>();

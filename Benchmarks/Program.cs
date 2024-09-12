@@ -65,6 +65,8 @@ namespace Benchmarks {
             // Run benchmark suite
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
+
+            Console.ReadLine();
         }
 
         public static IConfig GetConfig () =>
