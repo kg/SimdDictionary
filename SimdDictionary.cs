@@ -462,7 +462,44 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool Remove (K key) {
-            throw new NotImplementedException();
+            if (_Count == 0)
+                return false;
+
+            var hashCode = Comparer.GetHashCode(key);
+            var suffix = GetHashSuffix(hashCode);
+            var searchVector = Vector128.Create(suffix);
+            var firstBucketIndex = GetBucketIndex(hashCode);
+            var enumerator = new InternalEnumerator(this, firstBucketIndex);
+            
+            do {
+                var indexInBucket = ScanBucket(enumerator, key, searchVector);
+                if (indexInBucket == (int)ScanBucketResult.NoOverflow)
+                    return false;
+                else if (indexInBucket == (int)ScanBucketResult.Overflowed)
+                    continue;
+
+                ref var bucket = ref enumerator.Bucket;
+                uint bucketCount = bucket.Count,
+                    replacementIndexInBucket = bucketCount - 1;
+
+                unchecked {
+                    _Count--;
+                    bucket.Count--;
+                    bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
+                    bucket.SetSlot(replacementIndexInBucket, 0);
+                    enumerator.Key(this, indexInBucket) = enumerator.Key(this, (int)replacementIndexInBucket);
+                    enumerator.Value(this, indexInBucket) = enumerator.Value(this, (int)replacementIndexInBucket);
+                    enumerator.Key(this, (int)replacementIndexInBucket) = default!;
+                    enumerator.Value(this, (int)replacementIndexInBucket) = default!;
+                }
+
+                if (enumerator.BucketIndex != enumerator.InitialBucketIndex)
+                    AdjustCascadeCounts(enumerator.InitialBucketIndex, enumerator.BucketIndex, false);
+
+                return true;
+            } while (enumerator.MoveNext());
+
+            return false;
         }
 
         bool ICollection<KeyValuePair<K, V>>.Remove (KeyValuePair<K, V> item) =>
