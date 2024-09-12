@@ -3,9 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.9.34714.143
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimdDictionary", "SimdDictionary.csproj", "{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SimdDictionary", "SimdDictionary.csproj", "{ED3B09B8-35BC-4566-ADA1-8E7CB6424EDD}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Benchmarks", "Benchmarks\Benchmarks.csproj", "{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Benchmarks", "Benchmarks\Benchmarks.csproj", "{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DisasmHarness", "DisasmHarness\DisasmHarness.csproj", "{6DB2921A-9E1C-4DD4-8A54-30D9B8D77E81}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,6 +23,10 @@ Global
 		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EFD6C919-0538-489E-BC9D-5FC18F83FFBF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6DB2921A-9E1C-4DD4-8A54-30D9B8D77E81}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6DB2921A-9E1C-4DD4-8A54-30D9B8D77E81}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6DB2921A-9E1C-4DD4-8A54-30D9B8D77E81}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6DB2921A-9E1C-4DD4-8A54-30D9B8D77E81}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

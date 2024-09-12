@@ -231,7 +231,7 @@ namespace Benchmarks {
         [Benchmark]
         public void AddSameRepeatedlyThenClear () {
             for (int i = 0; i < Size; i++)
-                Dict.TryAdd(Keys[0], Keys[0]);
+                Dict.TryAdd(Keys[i % 2], Keys[i % 2]);
 
             Dict.Clear();
         }

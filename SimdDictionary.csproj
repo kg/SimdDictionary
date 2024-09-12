@@ -21,8 +21,11 @@
 
   <ItemGroup>
     <Compile Remove="Benchmarks\**" />
+    <Compile Remove="DisasmHarness\**" />
     <EmbeddedResource Remove="Benchmarks\**" />
+    <EmbeddedResource Remove="DisasmHarness\**" />
     <None Remove="Benchmarks\**" />
+    <None Remove="DisasmHarness\**" />
   </ItemGroup>
 
 </Project>
