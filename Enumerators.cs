@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
@@ -191,7 +192,7 @@ namespace SimdDictionary {
 
                     // We iterate over the whole bucket including empty slots to keep the indices in sync
                     while (_valueIndexLocal < BucketSizeI) {
-                        var suffix = _currentBucket.GetSlot(unchecked((nuint)_valueIndexLocal));
+                        var suffix = _currentBucket.GetSlot(_valueIndexLocal);
                         if (suffix != 0)
                             return true;
                         _valueIndexLocal++;

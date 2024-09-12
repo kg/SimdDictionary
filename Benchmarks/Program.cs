@@ -13,8 +13,10 @@ using SimdDictionary;
 namespace Benchmarks {
     public class Program {
         public static void Main (string[] args) {
+            // Self-test before running benchmark suite
+
             var rng = new Random(1234);
-            int c = 4096, d = 4096 * 100;
+            int c = 4096, d = 4096 * 5;
             List<long> keys = new (c),
                 values = new (c);
             var test = new SimdDictionary<long, long>(c);
@@ -60,10 +62,9 @@ namespace Benchmarks {
             if (test.Count != 0)
                 throw new Exception();
 
+            // Run benchmark suite
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
                 .Run(args, GetConfig());
-
-            Console.ReadLine();
         }
 
         public static IConfig GetConfig () =>
