@@ -26,13 +26,17 @@ namespace Benchmarks {
 
         [GlobalSetup]
         public virtual void Setup () {
-            var ctor = typeof(T).GetConstructor(new [] { typeof(int) });
-            if (ctor == null)
-                throw new Exception("Ctor is missing????");
             // HACK: Don't benchmark growth, since we don't have load factor management yet
             // We initialize with Size items and then add Size more during insertion benchmark
-            if (Populate)
-                Dict = (T)ctor.Invoke(new object[] { Size });
+            if (Populate) {
+                // thanks nativeaot
+                if (typeof(T) == typeof(SimdDictionary.SimdDictionary<TKey, TValue>))
+                    Dict = (T)(object)new SimdDictionary.SimdDictionary<TKey, TValue>(Size);
+                else if (typeof(T) == typeof(Dictionary<TKey, TValue>))
+                    Dict = (T)(object)new Dictionary<TKey, TValue>(Size);
+                else
+                    throw new Exception();
+            }
             Keys = new List<TKey>(Size);
             UnusedKeys = new List<TKey>(Size);
             Values = new List<TValue>(Size);

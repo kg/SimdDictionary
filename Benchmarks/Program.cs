@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Environments;
+using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using SimdDictionary;
@@ -66,6 +68,7 @@ namespace Benchmarks {
 
         public static IConfig GetConfig () =>
             DefaultConfig.Instance
-                .WithOption(ConfigOptions.JoinSummary, true);
+                .WithOption(ConfigOptions.JoinSummary, true)
+                .AddJob(Job.Default.WithRuntime(NativeAotRuntime.Net80));
     }
 }
