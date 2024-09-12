@@ -11,14 +11,28 @@ using SimdDictionary;
 namespace Benchmarks {
     public class Program {
         public static void Main (string[] args) {
-            var test = new SimdDictionary<long, long>();
             var rng = new Random(1234);
             int c = 4096, d = 4096 * 5;
-            var keys = new List<long>();
-            for (int i = 0; i < c; i++)
+            List<long> keys = new (c),
+                values = new (c);
+            var test = new SimdDictionary<long, long>(c);
+
+            for (int i = 0; i < c; i++) {
                 keys.Add(rng.NextInt64());
+                values.Add(i * 2 + 1);
+            }
+
             for (int i = 0; i < c; i++)
-                test.Add(keys[i], i * 2 + 1);
+                test.Add(keys[i], values[i]);
+
+            // Integrity check
+            var expectedKeySet = keys.OrderBy(k => k).ToList();
+            var enumeratedKeySet = test.Keys.OrderBy(k => k).ToList();
+            if (!expectedKeySet.SequenceEqual(enumeratedKeySet)) {
+                var missing = new HashSet<long>(keys);
+                missing.ExceptWith(enumeratedKeySet);
+                throw new KeyNotFoundException();
+            }
 
             for (int j = 0; j < d; j++)
                 for (int i = 0; i < c; i++)

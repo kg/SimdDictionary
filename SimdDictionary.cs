@@ -1,279 +1,165 @@
 ﻿using System.Buffers;
 using System.Collections;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 
 namespace SimdDictionary {
-    public class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
-        internal enum InsertFailureReason {
-            None,
-            AlreadyPresent = 1,
-            NeedToGrow = 2,
-        }
 
-        // Ideal bucket size for 8-byte keys is either 14 or 6.
-        // Ideal bucket size for 4-byte keys is 12.
-        public const uint BucketSize = 14;
-        public const int InitialCapacity = (int)BucketSize * 4,
-            OversizePercentage = 150;
+    [StructLayout(LayoutKind.Explicit)]
+    internal unsafe struct Bucket {
+        public const uint CountSlot = 14,
+            CascadeSlot = 15;
 
-        // We need to make sure suffixes are never zero, and it's
-        //  more likely that a bad hash will collide at the top bit
-        //  than at the bottom (i.e. using an int/ptr as its own hash)
-        public const uint SuffixSalt = 0b10000000;
+        [FieldOffset(0)]
+        public Vector128<byte> Vector;
+        [FieldOffset(0)]
+        public fixed byte Slots[16];
 
-        // Must match BucketSize
-        [InlineArray(14)]
-        internal struct KeyArray {
-            public K Key;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        internal readonly byte GetSlot (nuint index) =>
+            Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Vector)), index);
 
-        [StructLayout(LayoutKind.Sequential, Pack = 16)]
-        internal struct Bucket {
-            public Vector128<byte> Suffixes;
-            public KeyArray Keys;
+        // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        internal void SetSlot (nuint index, byte value) =>
+            Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Vector), index) = value;
 
-            internal byte GetSlot (nuint index) =>
-                Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index);
-
-            // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
+        public byte Count {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal void SetSlot (nuint index, byte value) =>
-                Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index) = value;
+            readonly get => GetSlot(CountSlot);
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            set => SetSlot(CountSlot, value);
+        }
 
-            public byte Count {
-                [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => GetSlot(BucketSize);
-                [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                set => SetSlot(BucketSize, value);
+        public byte CascadeCount {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            readonly get => GetSlot(CascadeSlot);
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            set => SetSlot(CascadeSlot, value);
+        }
+    }
+
+    public partial class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
+        internal enum InsertMode {
+            // Fail the insertion if a matching key is found
+            EnsureUnique,
+            // Overwrite the value if a matching key is found
+            OverwriteValue,
+            // Overwrite both the key and value if a matching key is found
+            OverwriteKeyAndValue,
+            // Don't scan for existing matches before inserting into the bucket
+            Rehashing
+        }
+
+        internal enum InsertResult {
+            OkAddedNew,
+            OkOverwroteExisting,
+            NeedToGrow,
+            KeyAlreadyPresent,
+        }
+
+        // Special result indexes when the key is not found in the bucket
+        internal enum ScanBucketResult : int {
+            // One or more items cascaded out of the bucket so we need to keep scanning
+            Overflowed = -2,
+            // Nothing cascaded out of the bucket so we can stop scanning
+            NoOverflow = -1,
+        }
+
+        public const int InitialCapacity = 0,
+            // User-specified capacity values will be increased to this percentage in order
+            //  to maintain an ideal load factor. FIXME: 120 isn't right
+            OversizePercentage = 120,
+            BucketSizeI = 14;
+
+        public const uint
+            // We need to make sure suffixes are never zero, and it's
+            //  more likely that a bad hash will collide at the top bit
+            //  than at the bottom (i.e. using an int/ptr as its own hash)
+            SuffixSalt = 0b10000000,
+            BucketSizeU = 14;
+
+        internal readonly struct KeyComparer {
+            public readonly IEqualityComparer<K>? Comparer;
+
+            public KeyComparer (IEqualityComparer<K>? comparer) {
+                if (typeof(K).IsValueType)
+                    Comparer = comparer;
+                else
+                    Comparer = comparer ?? EqualityComparer<K>.Default;
             }
 
-            public bool IsCascaded {
-                [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => GetSlot(BucketSize + 1) != 0;
-                [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                set => SetSlot(BucketSize + 1, value ? (byte)1 : (byte)0);
+            public bool Equals (K lhs, K rhs) {
+                if (typeof(K).IsValueType && (Comparer == null))
+                    return EqualityComparer<K>.Default.Equals(lhs, rhs);
+                else
+                    return Comparer!.Equals(lhs, rhs);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+            internal uint GetHashCode (K key) {
+                if (Comparer == null)
+                    return unchecked((uint)key!.GetHashCode());
+                else
+                    return unchecked((uint)Comparer.GetHashCode(key!));
             }
         }
 
-        public struct KeyCollection : ICollection<K> {
-            public readonly SimdDictionary<K, V> Dictionary;
+        internal ref struct InternalEnumerator {
+            public readonly Span<Bucket> Buckets;
 
-            public struct Enumerator : IEnumerator<K> {
-                private int _bucketIndex, _valueIndex, _valueIndexLocal;
-                private Bucket _currentBucket;
-                private Bucket[] _buckets;
-                public K Current {
-                    get {
-                        if (_valueIndex < 0)
-                            throw new InvalidOperationException("No value");
-                        return _currentBucket.Keys[_valueIndexLocal];
-                    }
-                }
-                object IEnumerator.Current => Current;
+            public readonly int InitialBucketIndex;
+            public int BucketIndex, ElementIndex;
+            public ref Bucket Bucket;
 
-                public Enumerator (SimdDictionary<K, V> dictionary) {
-                    _bucketIndex = -1;
-                    _valueIndex = -1;
-                    _valueIndexLocal = (int)BucketSize;
-                    _buckets = dictionary._Buckets;
-                }
-
-                public void Dispose () {
-                }
-
-                public bool MoveNext () {
-                    _valueIndex++;
-                    _valueIndexLocal++;
-
-                    while (_bucketIndex < _buckets.Length) {
-                        if (_valueIndexLocal >= BucketSize) {
-                            _valueIndexLocal = 0;
-                            _bucketIndex++;
-                            if (_bucketIndex >= _buckets.Length)
-                                return false;
-                            _currentBucket = _buckets[_bucketIndex];
-                        }
-
-                        // We iterate over the whole bucket including empty slots to keep the indices in sync
-                        while (_valueIndexLocal < BucketSize) {
-                            var suffix = _currentBucket.GetSlot(unchecked((nuint)_valueIndexLocal));
-                            if (suffix != 0)
-                                return true;
-                            _valueIndexLocal++;
-                            _valueIndex++;
-                        }
-                    }
-
-                    return false;
-                }
-
-                public void Reset () {
-                    _bucketIndex = -1;
-                    _valueIndex = -1;
-                    _valueIndexLocal = (int)BucketSize;
-                }
+            /// <summary>
+            /// Creates a fully-initialized InternalEnumerator pointed at the bucket you specify.
+            /// You don't need to call MoveNext before using it!
+            /// </summary>
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public InternalEnumerator (SimdDictionary<K, V> self, int bucketIndex = 0) {
+                Buckets = self._Buckets;
+                if (Buckets == null)
+                    throw new NullReferenceException();
+                InitialBucketIndex = BucketIndex = bucketIndex;
+                ElementIndex = bucketIndex * BucketSizeI;
+                Bucket = ref Buckets[bucketIndex];
             }
 
-            internal KeyCollection (SimdDictionary<K, V> dictionary) {
-                Dictionary = dictionary;
-            }
-
-            int ICollection<K>.Count => Dictionary.Count;
-            bool ICollection<K>.IsReadOnly => true;
-
-            void ICollection<K>.Add (K item) =>
-                throw new NotImplementedException();
-
-            void ICollection<K>.Clear () =>
-                throw new NotImplementedException();
-
-            bool ICollection<K>.Contains (K item) =>
-                Dictionary.ContainsKey(item);
-
-            void ICollection<K>.CopyTo (K[] array, int arrayIndex) {
-                using (var e = GetEnumerator())
-                    while (e.MoveNext())
-                        array[arrayIndex++] = e.Current;
-            }
-
-            public Enumerator GetEnumerator () =>
-                new Enumerator(Dictionary);
-
-            IEnumerator<K> IEnumerable<K>.GetEnumerator () =>
-                GetEnumerator();
-
-            IEnumerator IEnumerable.GetEnumerator () =>
-                GetEnumerator();
-
-            bool ICollection<K>.Remove (K item) =>
-                throw new NotImplementedException();
-        }
-
-        public struct ValueCollection : ICollection<V> {
-            public readonly SimdDictionary<K, V> Dictionary;
-
-            public struct Enumerator : IEnumerator<V> {
-                internal SimdDictionary<K, V>.Enumerator Inner;
-
-                public V Current => Inner.Current.Value;
-                object IEnumerator.Current => Inner.Current.Value;
-
-                internal Enumerator (SimdDictionary<K, V> dictionary) {
-                    Inner = dictionary.GetEnumerator();
-                }
-
-                public void Dispose () =>
-                    Inner.Dispose();
-
-                public bool MoveNext () =>
-                    Inner.MoveNext();
-
-                public void Reset () =>
-                    Inner.Reset();
-            }
-
-            internal ValueCollection (SimdDictionary<K, V> dictionary) {
-                Dictionary = dictionary;
-            }
-
-            int ICollection<V>.Count => Dictionary.Count;
-            bool ICollection<V>.IsReadOnly => true;
-
-            void ICollection<V>.Add (V item) =>
-                throw new NotImplementedException();
-
-            void ICollection<V>.Clear () =>
-                throw new NotImplementedException();
-
-            // FIXME
-            bool ICollection<V>.Contains (V item) =>
-                throw new NotImplementedException();
-
-            void ICollection<V>.CopyTo (V[] array, int arrayIndex) {
-                using (var e = GetEnumerator())
-                    while (e.MoveNext())
-                        array[arrayIndex++] = e.Current;
-            }
-
-            public Enumerator GetEnumerator () =>
-                new Enumerator(Dictionary);
-
-            IEnumerator<V> IEnumerable<V>.GetEnumerator () =>
-                GetEnumerator();
-
-            IEnumerator IEnumerable.GetEnumerator () =>
-                GetEnumerator();
-
-            bool ICollection<V>.Remove (V item) =>
-                throw new NotImplementedException();
-        }
-
-        public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
-            private int _bucketIndex, _valueIndex, _valueIndexLocal;
-            private Bucket _currentBucket;
-            private Bucket[] _buckets;
-            private V[] _values;
-            public KeyValuePair<K, V> Current {
-                get {
-                    if (_valueIndex < 0)
-                        throw new InvalidOperationException("No value");
-                    return new KeyValuePair<K, V>(_currentBucket.Keys[_valueIndexLocal], _values[_valueIndex]);
-                }
-            }
-            object IEnumerator.Current => Current;
-
-            public Enumerator (SimdDictionary<K, V> dictionary) {
-                _bucketIndex = -1;
-                _valueIndex = -1;
-                _valueIndexLocal = (int)BucketSize;
-                _buckets = dictionary._Buckets;
-                _values = dictionary._Values;
-            }
-
-            public void Dispose () {
-            }
-
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool MoveNext () {
-                _valueIndex++;
-                _valueIndexLocal++;
-
-                while (_bucketIndex < _buckets.Length) {
-                    if (_valueIndexLocal >= BucketSize) {
-                        _valueIndexLocal = 0;
-                        _bucketIndex++;
-                        if (_bucketIndex >= _buckets.Length)
-                            return false;
-                        _currentBucket = _buckets[_bucketIndex];
-                    }
-
-                    // We iterate over the whole bucket including empty slots to keep the indices in sync
-                    while (_valueIndexLocal < BucketSize) {
-                        var suffix = _currentBucket.GetSlot(unchecked((nuint)_valueIndexLocal));
-                        if (suffix != 0)
-                            return true;
-                        _valueIndexLocal++;
-                        _valueIndex++;
-                    }
+                if (++BucketIndex >= Buckets.Length) {
+                    BucketIndex = ElementIndex = 0;
+                    Bucket = ref Buckets[0];
+                } else {
+                    Bucket = ref Buckets[BucketIndex];
+                    ElementIndex += BucketSizeI;
                 }
 
-                return false;
+                if (BucketIndex == InitialBucketIndex)
+                    return false;
+                else
+                    return true;
             }
 
-            public void Reset () {
-                _bucketIndex = -1;
-                _valueIndex = -1;
-                _valueIndexLocal = (int)BucketSize;
-            }
+            public ref K Key (SimdDictionary<K, V> self, int index) =>
+                ref self._Keys.AsSpan()[ElementIndex + index];
+
+            public ref V Value (SimdDictionary<K, V> self, int index) =>
+                ref self._Values.AsSpan()[ElementIndex + index];
         }
 
-        public readonly IEqualityComparer<K>? Comparer;
         public readonly KeyCollection Keys;
         public readonly ValueCollection Values;
+        private readonly KeyComparer Comparer;
         private int _Count;
         private Bucket[] _Buckets;
+        private K[] _Keys;
         private V[] _Values;
 
         public SimdDictionary () 
@@ -290,18 +176,16 @@ namespace SimdDictionary {
 
         public SimdDictionary (int capacity, IEqualityComparer<K>? comparer) {
             Unsafe.SkipInit(out _Buckets);
+            Unsafe.SkipInit(out _Keys);
             Unsafe.SkipInit(out _Values);
-            if (typeof(K).IsValueType)
-                Comparer = comparer;
-            else
-                Comparer = comparer ?? EqualityComparer<K>.Default;
+            Comparer = new KeyComparer(comparer);
             EnsureCapacity(capacity);
             Keys = new KeyCollection(this);
             Values = new ValueCollection(this);
         }
 
         public SimdDictionary (SimdDictionary<K, V> source) 
-            : this (source.Count, source.Comparer) {
+            : this (source.Count, source.Comparer.Comparer) {
             // FIXME: Optimize this
             foreach (var kvp in source)
                 Add(kvp.Key, kvp.Value);
@@ -310,14 +194,16 @@ namespace SimdDictionary {
         static int AdjustCapacity (int capacity) {
             if (capacity < 1)
                 capacity = 1;
-            var bucketCount = ((capacity + BucketSize - 1) / BucketSize);
+            var bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
             // Power-of-two bucket counts enable using & (count - 1) instead of mod count
             var npot = BitOperations.RoundUpToPowerOf2((uint)bucketCount);
-            return (int)(npot * BucketSize);
+            return (int)(npot * BucketSizeI);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
+            if (capacity < 0)
+                throw new ArgumentOutOfRangeException(nameof(capacity));
             capacity = AdjustCapacity(capacity * OversizePercentage / 100);
 
             if ((_Buckets != null) && (Capacity >= capacity))
@@ -339,39 +225,34 @@ namespace SimdDictionary {
 
         internal bool TryResize (int capacity) {
             var oldCount = _Count;
-            var bucketCount = capacity / BucketSize;
-            var newBuckets = new Bucket[bucketCount];
-            var newValues = new V[capacity];
-            if (_Buckets != null) {
-                int newCount = TryRehash(newBuckets, newValues, _Buckets, _Values);
-                if (newCount != oldCount)
+            var bucketCount = capacity / BucketSizeI;
+            var oldBuckets = _Buckets;
+            var oldKeys = _Keys;
+            var oldValues = _Values;
+            _Buckets = new Bucket[bucketCount];
+            _Keys = new K[capacity];
+            _Values = new V[capacity];
+            if (oldBuckets != null)
+                if (!TryRehash(oldBuckets, oldKeys, oldValues))
                     return false;
-            }
-            _Buckets = newBuckets;
-            _Values = newValues;
             return true;
         }
 
-        internal int TryRehash (Bucket[] newBuckets, V[] newValues, Bucket[] oldBuckets, V[] oldValues) {
-            int newCount = 0;
-
+        internal bool TryRehash (Bucket[] oldBuckets, K[] oldKeys, V[] oldValues) {
             for (uint i = 0; i < oldBuckets.Length; i++) {
-                ref var oldBucket = ref oldBuckets[i];
-                var oldBucketSuffixes = oldBucket.Suffixes;
-                var baseIndex = i * BucketSize;
-                for (int j = 0; j < BucketSize; j++) {
-                    if (oldBucketSuffixes[j] == 0)
+                ref var bucket = ref oldBuckets[i];
+                var baseIndex = i * BucketSizeU;
+
+                for (uint j = 0, c = bucket.Count; j < c; j++) {
+                    if (bucket.GetSlot(j) == 0)
                         continue;
 
-                    uint k = baseIndex + unchecked((uint)j);
-                    var insertResult = TryInsert(newBuckets, newValues, oldBucket.Keys[j], ref oldValues[k], false);
-                    if (insertResult != InsertFailureReason.None)
-                        return newCount;
-                    newCount++;
+                    if (TryInsert(oldKeys[baseIndex + j], oldValues[baseIndex + j], InsertMode.EnsureUnique) != InsertResult.OkAddedNew)
+                        return false;
                 }
             }
 
-            return newCount;
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -380,117 +261,129 @@ namespace SimdDictionary {
             //  use the top bits of the hash as a suffix
             unchecked((byte)((hashCode >> 24) | SuffixSalt));
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        internal uint GetHashCode (K key) {
-            var comparer = Comparer;
-            if (comparer == null)
-                return unchecked((uint)key!.GetHashCode());
-            else
-                return unchecked((uint)comparer.GetHashCode(key!));
+        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.AggressiveInlining)]
+        internal int GetBucketIndex (uint hashCode) =>
+            unchecked((int)(hashCode & (uint)(_Buckets.Length - 1)));
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.AggressiveInlining)]
+        internal int FindFirstMatchingSuffix (Vector128<byte> haystack, Vector128<byte> needle) {
+            int result = 32;
+
+            if (Sse2.IsSupported) {
+                result = BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(needle, haystack)));
+            } else if (AdvSimd.Arm64.IsSupported) {
+                // Completely untested
+                var matchVector = AdvSimd.CompareEqual(needle, haystack);
+                var masked = AdvSimd.And(matchVector, Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
+                var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
+                    (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
+                result = BitOperations.TrailingZeroCount(bits);
+            } else
+                throw new NotImplementedException();
+
+            return result;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal ref V FindValue (Bucket[] _buckets, V[] values, K key) {
-            Vector128<byte> searchVector;
-            var comparer = Comparer;
-            var bucketCount = unchecked((uint)_buckets.Length);
-
-            if (typeof(K).IsValueType && (comparer == null)) {
-                var hashCode = unchecked((uint)key!.GetHashCode());
-                var suffix = unchecked((byte)((hashCode >> 24) | SuffixSalt));
-                var firstBucketIndex = unchecked(hashCode & (bucketCount - 1));
-                ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
-                // An ideal searchVector would zero the last two slots, but it's faster to allow
-                //  occasional false positives than it is to zero the vector slots :/
-                searchVector = Vector128.Create(suffix);
-                for (nuint i = firstBucketIndex; i < bucketCount; i++) {
-                    var count = searchBucket.Count;
-                    
-                    var matchVector = Vector128.Equals(searchBucket.Suffixes, searchVector);
-                    // On average this improves over iterating from 0-count, but only a little bit
-                    uint notEqualsElements = matchVector.ExtractMostSignificantBits();
-                    // the first index is almost always the correct one
-                    nint firstIndex = BitOperations.TrailingZeroCount(notEqualsElements);
-                    ref var firstSearchKey = ref Unsafe.Add(ref searchBucket.Keys.Key, firstIndex);
-
-                    for (nuint j = unchecked((nuint)firstIndex); j < count; j++) {
-                        if (EqualityComparer<K>.Default.Equals(firstSearchKey, key)) {
-                            var valueIndex = j + (i * BucketSize);
-                            return ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(values), valueIndex);
-                        }
-                        firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
-                    }
-
-                    if (!searchBucket.IsCascaded)
-                        return ref Unsafe.NullRef<V>();
-
-                    searchBucket = ref Unsafe.Add(ref searchBucket, 1);
-                }
-            } else {
-                var hashCode = unchecked((uint)comparer.GetHashCode(key!));
-                var suffix = unchecked((byte)((hashCode >> 24) | SuffixSalt));
-                var firstBucketIndex = unchecked(hashCode & (bucketCount - 1));
-                ref var searchBucket = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buckets), firstBucketIndex);
-                // An ideal searchVector would zero the last two slots, but it's faster to allow
-                //  occasional false positives than it is to zero the vector slots :/
-                searchVector = Vector128.Create(suffix);
-                for (nuint i = firstBucketIndex; i < bucketCount; i++) {
-                    var count = searchBucket.Count;
-                    
-                    var matchVector = Vector128.Equals(searchBucket.Suffixes, searchVector);
-                    // On average this improves over iterating from 0-count, but only a little bit
-                    uint notEqualsElements = matchVector.ExtractMostSignificantBits();
-                    // the first index is almost always the correct one
-                    nint firstIndex = BitOperations.TrailingZeroCount(notEqualsElements);
-                    ref var firstSearchKey = ref Unsafe.Add(ref searchBucket.Keys.Key, firstIndex);
-
-                    for (nuint j = unchecked((nuint)firstIndex); j < count; j++) {
-                        if (comparer!.Equals(firstSearchKey, key)) {
-                            var valueIndex = j + (i * BucketSize);
-                            return ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(values), valueIndex);
-                        }
-                        firstSearchKey = ref Unsafe.Add(ref firstSearchKey, 1);
-                    }
-
-                    if (!searchBucket.IsCascaded)
-                        return ref Unsafe.NullRef<V>();
-
-                    searchBucket = ref Unsafe.Add(ref searchBucket, 1);
-                }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal int ScanBucket (InternalEnumerator enumerator, K needle, Vector128<byte> searchVector) {
+            int count = enumerator.Bucket.Count,
+                index = FindFirstMatchingSuffix(enumerator.Bucket.Vector, searchVector);
+            for (; index < count; index++) {
+                if (Comparer.Equals(enumerator.Key(this, index), needle))
+                    return index;
             }
+
+            return enumerator.Bucket.CascadeCount > 0
+                ? (int)ScanBucketResult.Overflowed
+                : (int)ScanBucketResult.NoOverflow;
+        }
+
+        internal void AdjustCascadeCounts (int firstBucketIndex, int lastBucketIndex, bool increase) {
+            var enumerator = new InternalEnumerator(this, firstBucketIndex);
+            do {
+                if (enumerator.BucketIndex == lastBucketIndex)
+                    return;
+
+                byte cascadeCount = enumerator.Bucket.CascadeCount;
+                if (cascadeCount < 255) {
+                    if (increase) {
+                        if (enumerator.Bucket.Count < BucketSizeI)
+                            throw new Exception();
+
+                        enumerator.Bucket.CascadeCount = (byte)(cascadeCount + 1);
+                    }
+                    else if (cascadeCount == 0)
+                        throw new InvalidOperationException();
+                    else
+                        enumerator.Bucket.CascadeCount = (byte)(cascadeCount - 1);
+                }
+            } while (enumerator.MoveNext());
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
+        internal ref V FindValue (K needle) {
+            if (_Count == 0)
+                return ref Unsafe.NullRef<V>();
+
+            var hashCode = Comparer.GetHashCode(needle);
+            var suffix = GetHashSuffix(hashCode);
+            var searchVector = Vector128.Create(suffix);
+            var firstBucketIndex = GetBucketIndex(hashCode);
+            var enumerator = new InternalEnumerator(this, firstBucketIndex);
+
+            do {
+                var indexInBucket = ScanBucket(enumerator, needle, searchVector);
+                if (indexInBucket >= 0)
+                    return ref enumerator.Value(this, indexInBucket);
+                else if (indexInBucket == (int)ScanBucketResult.NoOverflow)
+                    return ref Unsafe.NullRef<V>();
+            } while (enumerator.MoveNext());
+
             return ref Unsafe.NullRef<V>();
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal InsertFailureReason TryInsert (Bucket[] buckets, V[] values, K key, ref V value, bool ensureNotPresent) {
-            if (ensureNotPresent)
-                if (!Unsafe.IsNullRef(ref FindValue(buckets, values, key)))
-                    return InsertFailureReason.AlreadyPresent;
+        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
+        internal InsertResult TryInsert (K key, V value, InsertMode mode) {
+            // FIXME: Load factor
+            if ((_Keys == null) || (_Count >= _Keys.Length))
+                return InsertResult.NeedToGrow;
 
-            var hashCode = GetHashCode(key);
+            var hashCode = Comparer.GetHashCode(key);
             var suffix = GetHashSuffix(hashCode);
-            var bucketIndex = hashCode & (buckets.Length - 1);
+            var searchVector = Vector128.Create(suffix);
+            var firstBucketIndex = GetBucketIndex(hashCode);
+            var enumerator = new InternalEnumerator(this, firstBucketIndex);
 
-            while (bucketIndex < buckets.Length) {
-                ref var newBucket = ref buckets[bucketIndex];
-                var localIndex = newBucket.Count;
-                if (localIndex >= BucketSize) {
-                    newBucket.IsCascaded = true;
-                    bucketIndex++;
-                    continue;
+            do {
+                if (mode != InsertMode.Rehashing) {
+                    var indexInBucket = ScanBucket(enumerator, key, searchVector);
+                    if (indexInBucket >= 0) {
+                        if (mode == InsertMode.EnsureUnique)
+                            return InsertResult.KeyAlreadyPresent;
+                        else {
+                            if (mode == InsertMode.OverwriteKeyAndValue)
+                                enumerator.Key(this, indexInBucket) = key;
+                            enumerator.Value(this, indexInBucket) = value;
+                            return InsertResult.OkOverwroteExisting;
+                        }
+                    }
                 }
 
-                newBucket.Count = unchecked((byte)(localIndex + 1));
-                newBucket.SetSlot(localIndex, suffix);
+                var newIndexInBucket = enumerator.Bucket.Count;
+                if (newIndexInBucket < BucketSizeU) {
+                    enumerator.Bucket.Count = (byte)(newIndexInBucket + 1);
+                    enumerator.Bucket.SetSlot(newIndexInBucket, suffix);
+                    enumerator.Key(this, newIndexInBucket) = key;
+                    enumerator.Value(this, newIndexInBucket) = value;
+                    if (firstBucketIndex != enumerator.BucketIndex)
+                        AdjustCascadeCounts(firstBucketIndex, enumerator.BucketIndex, true);
+                    return InsertResult.OkAddedNew;
+                } else
+                    ;
+            } while (enumerator.MoveNext());
 
-                var index = (bucketIndex * BucketSize) + localIndex;
-                newBucket.Keys[localIndex] = key;
-                values[index] = value;
-
-                return InsertFailureReason.None;
-            }
-
-            return InsertFailureReason.NeedToGrow;
+            // FIXME: This shouldn't be possible
+            return InsertResult.NeedToGrow;
         }
 
         public V this[K key] { 
@@ -508,7 +401,7 @@ namespace SimdDictionary {
         ICollection<V> IDictionary<K, V>.Values => Values;
 
         public int Count => _Count;
-        public int Capacity => _Buckets.Length * (int)BucketSize;
+        public int Capacity => _Buckets.Length * BucketSizeI;
 
         bool ICollection<KeyValuePair<K, V>>.IsReadOnly => false;
 
@@ -522,15 +415,13 @@ namespace SimdDictionary {
             EnsureSpaceForNewItem();
 
         retry:
-            var insertResult = TryInsert(_Buckets, _Values, key, ref value, true);
+            var insertResult = TryInsert(key, value, InsertMode.EnsureUnique);
             switch (insertResult) {
-                case InsertFailureReason.None:
+                case InsertResult.OkAddedNew:
                     _Count++;
                     return true;
-                case InsertFailureReason.AlreadyPresent:
-                    return false;
-                case InsertFailureReason.NeedToGrow:
-                    TryResize(Capacity * 2);
+                case InsertResult.NeedToGrow:
+                    TryResize(Capacity + 1);
                     goto retry;
                 default:
                     return false;
@@ -551,7 +442,7 @@ namespace SimdDictionary {
             (value?.Equals(item.Value) == true);
 
         public bool ContainsKey (K key) {
-            return !Unsafe.IsNullRef(ref FindValue(_Buckets, _Values, key));
+            return !Unsafe.IsNullRef(ref FindValue(key));
         }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
@@ -571,32 +462,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool Remove (K key) {
-            ref var oldValueSlot = ref FindValue(_Buckets, _Values, key);
-            if (Unsafe.IsNullRef(ref oldValueSlot))
-                return false;
-
-            var valueOffsetBytes = Unsafe.ByteOffset(ref _Values[0], ref oldValueSlot);
-            var index = unchecked((uint)(valueOffsetBytes / Unsafe.SizeOf<V>()));
-            var bucketIndex = index / BucketSize;
-            var slotInBucket = index % BucketSize;
-
-            ref var bucket = ref _Buckets[bucketIndex];
-            var bucketCount = bucket.Count;
-            ref var oldKeySlot = ref Unsafe.Add(ref bucket.Keys.Key, slotInBucket);
-            var newCount = bucketCount - 1;
-            var newIndex = (bucketIndex * BucketSize) + newCount;
-            ref var newKeySlot = ref Unsafe.Add(ref bucket.Keys.Key, newCount);
-            ref var newValueSlot = ref _Values[newIndex];
-            oldKeySlot = newKeySlot;
-            oldValueSlot = newValueSlot;
-            newKeySlot = default;
-            newValueSlot = default;
-            bucket.SetSlot(unchecked((nuint)slotInBucket), bucket.GetSlot(unchecked((nuint)newCount)));
-            bucket.SetSlot(unchecked((nuint)newCount), 0);
-            bucket.Count = unchecked((byte)newCount);
-
-            _Count--;
-            return true;
+            throw new NotImplementedException();
         }
 
         bool ICollection<KeyValuePair<K, V>>.Remove (KeyValuePair<K, V> item) =>
@@ -605,7 +471,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool TryGetValue (K key, out V value) {
-            ref var result = ref FindValue(_Buckets, _Values, key);
+            ref var result = ref FindValue(key);
             if (Unsafe.IsNullRef(ref result)) {
                 value = default!;
                 return false;
