@@ -2,7 +2,9 @@
 using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
+using System.Net.Sockets;
 using System.Numerics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -142,6 +144,59 @@ namespace SimdDictionary {
                 return true;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static int FindSuffixInBucket (Bucket bucket, byte suffix) {
+                // We create the search vector on the fly with Vector128.Create(suffix) because passing it as a param from outside
+                //  seems to cause RyuJIT to generate inferior code instead of flowing it through a register even when inlined
+                if (Sse2.IsSupported) {
+                    return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket)));
+                } else if (AdvSimd.Arm64.IsSupported) {
+                    // Completely untested
+                    var matchVector = AdvSimd.CompareEqual(Vector128.Create(suffix), bucket);
+                    var masked = AdvSimd.And(matchVector, Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
+                    var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
+                        (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
+                    return BitOperations.TrailingZeroCount(bits);
+                } else
+                    // FIXME: Scalar implementation like dn_simdhash's
+                    throw new NotImplementedException();
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static int FindKeyInBucket (Bucket bucket, Span<K> keys, int elementIndex, int indexInBucket, IEqualityComparer<K>? comparer, K needle) {
+                // We need to duplicate the loop header logic and move it inside the if, otherwise
+                //  count gets spilled to the stack.
+                if (typeof(K).IsValueType && (comparer == null)) {
+                    // We do this instead of a for-loop so we can skip ReadKey when there's no match,
+                    //  which improves performance for missing items and/or hash collisions
+                    int count = bucket[CountSlot];
+                    if (indexInBucket >= count)
+                        return -1;
+
+                    ref K key = ref keys[elementIndex + indexInBucket];
+                    do {
+                        if (EqualityComparer<K>.Default.Equals(needle, key))
+                            return indexInBucket;
+                        indexInBucket++;
+                        key = ref Unsafe.Add(ref key, 1);
+                    } while (indexInBucket < count);
+                } else {
+                    int count = bucket[CountSlot];
+                    if (indexInBucket >= count)
+                        return -1;
+
+                    ref K key = ref keys[elementIndex + indexInBucket];
+                    do {
+                        if (comparer!.Equals(needle, key))
+                            return indexInBucket;
+                        indexInBucket++;
+                        key = ref Unsafe.Add(ref key, 1);
+                    } while (indexInBucket < count);
+                }
+
+                return -1;
+            }
+
             /// <summary>
             /// Scan the current bucket for any keys matching the specified key.
             /// </summary>
@@ -149,60 +204,17 @@ namespace SimdDictionary {
             /// <param name="suffix">The pre-computed hash suffix for the key.</param>
             /// <returns>the index of the located key within the bucket, OR, a signal value >= 32 (see ScanBucketResult)</returns>
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal readonly int ScanBucket (IEqualityComparer<K>? comparer, K needle, byte suffix) {
+            public readonly int ScanBucket (IEqualityComparer<K>? comparer, K needle, byte suffix) {
                 // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
                 var bucket = Bucket;
-
-                int index;
-                // We create the search vector on the fly with Vector128.Create(suffix) because passing it as a param from outside
-                //  seems to cause RyuJIT to generate inferior code instead of flowing it through a register even when inlined
-                if (Sse2.IsSupported) {
-                    index = BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket)));
-                } else if (AdvSimd.Arm64.IsSupported) {
-                    // Completely untested
-                    var matchVector = AdvSimd.CompareEqual(Vector128.Create(suffix), bucket);
-                    var masked = AdvSimd.And(matchVector, Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
-                    var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
-                        (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
-                    index = BitOperations.TrailingZeroCount(bits);
-                } else
-                    // FIXME: Scalar implementation like dn_simdhash's
-                    throw new NotImplementedException();
-
-                // We need to duplicate the loop header logic and move it inside the if, otherwise
-                //  count gets spilled to the stack.
-                if (typeof(K).IsValueType && (comparer == null)) {
-                    // We do this instead of a for-loop so we can skip ReadKey when there's no match,
-                    //  which improves performance for missing items and/or hash collisions
-                    int count = bucket[CountSlot];
-                    if (index >= count)
-                        goto no_match;
-
-                    ref K key = ref ReadKey(index);
-                    do {
-                        if (EqualityComparer<K>.Default.Equals(needle, key))
-                            return index;
-                        index++;
-                        key = ref Unsafe.Add(ref key, 1);
-                    } while (index < count);
-                } else {
-                    int count = bucket[CountSlot];
-                    if (index >= count)
-                        goto no_match;
-
-                    ref K key = ref ReadKey(index);
-                    do {
-                        if (comparer!.Equals(needle, key))
-                            return index;
-                        index++;
-                        key = ref Unsafe.Add(ref key, 1);
-                    } while (index < count);
-                }
-
-                no_match:
+                int startIndex = FindSuffixInBucket(bucket, suffix);
+                int index = FindKeyInBucket(bucket, Keys, ElementIndex, startIndex, comparer, needle);
+                if (index < 0)
                     return bucket[CascadeSlot] > 0
                         ? (int)ScanBucketResult.Overflowed
                         : (int)ScanBucketResult.NoOverflow;
+                else
+                    return index;
             }
 
             /// <summary>
