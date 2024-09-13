@@ -145,14 +145,14 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static int FindSuffixInBucket (Bucket bucket, byte suffix) {
+            public static int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
                 // We create the search vector on the fly with Vector128.Create(suffix) because passing it as a param from outside
                 //  seems to cause RyuJIT to generate inferior code instead of flowing it through a register even when inlined
                 if (Sse2.IsSupported) {
-                    return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket)));
+                    return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket)));
                 } else if (AdvSimd.Arm64.IsSupported) {
                     // Completely untested
-                    var matchVector = AdvSimd.CompareEqual(Vector128.Create(suffix), bucket);
+                    var matchVector = AdvSimd.CompareEqual(searchVector, bucket);
                     var masked = AdvSimd.And(matchVector, Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
                     var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
                         (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
@@ -163,7 +163,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static int FindKeyInBucket (Bucket bucket, Span<K> keys, int elementIndex, int indexInBucket, IEqualityComparer<K>? comparer, K needle) {
+            public static int FindKeyInBucket (Bucket bucket, ref K keys, int elementIndex, int indexInBucket, IEqualityComparer<K>? comparer, K needle) {
                 // We need to duplicate the loop header logic and move it inside the if, otherwise
                 //  count gets spilled to the stack.
                 if (typeof(K).IsValueType && (comparer == null)) {
@@ -173,7 +173,7 @@ namespace SimdDictionary {
                     if (indexInBucket >= count)
                         return -1;
 
-                    ref K key = ref keys[elementIndex + indexInBucket];
+                    ref K key = ref Unsafe.Add(ref keys, indexInBucket);
                     do {
                         if (EqualityComparer<K>.Default.Equals(needle, key))
                             return indexInBucket;
@@ -185,7 +185,7 @@ namespace SimdDictionary {
                     if (indexInBucket >= count)
                         return -1;
 
-                    ref K key = ref keys[elementIndex + indexInBucket];
+                    ref K key = ref Unsafe.Add(ref keys, indexInBucket);
                     do {
                         if (comparer!.Equals(needle, key))
                             return indexInBucket;
@@ -207,8 +207,8 @@ namespace SimdDictionary {
             public readonly int ScanBucket (IEqualityComparer<K>? comparer, K needle, byte suffix) {
                 // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
                 var bucket = Bucket;
-                int startIndex = FindSuffixInBucket(bucket, suffix);
-                int index = FindKeyInBucket(bucket, Keys, ElementIndex, startIndex, comparer, needle);
+                int startIndex = FindSuffixInBucket(bucket, Vector128.Create(suffix));
+                int index = FindKeyInBucket(bucket, ref Keys[ElementIndex], ElementIndex, startIndex, comparer, needle);
                 if (index < 0)
                     return bucket[CascadeSlot] > 0
                         ? (int)ScanBucketResult.Overflowed
@@ -271,17 +271,21 @@ namespace SimdDictionary {
             private FindValueCallback () {
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static void OnMatch (ref int data, int valueIndex, in Bucket bucket, int indexInBucket) {
                 data = valueIndex;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static void OnNoMatch (ref int data, ref Bucket bucket) {
                 data = -1;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static void OnFullBucket (ref int data, ref Bucket bucket) {
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static void OnLoopTermination (ref int data, int firstBucketIndex, int finalBucketIndex) {
             }
         }
@@ -422,22 +426,23 @@ namespace SimdDictionary {
             var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
             var bucketIndex = initialBucketIndex;
             var elementIndex = bucketIndex * BucketSizeI;
+            var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
 
             do {
                 // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
-                var bucketRegister = bucket;
-                int startIndex = InternalEnumerator.FindSuffixInBucket(bucketRegister, suffix);
-                int index = InternalEnumerator.FindKeyInBucket(bucketRegister, keys, elementIndex, startIndex, comparer, key);
+                // var bucketRegister = bucket;
+                int startIndex = InternalEnumerator.FindSuffixInBucket(bucket, searchVector);
+                int index = InternalEnumerator.FindKeyInBucket(bucket, ref keys[elementIndex], elementIndex, startIndex, comparer, key);
                 if (index < 0) {
-                    if (bucketRegister[InternalEnumerator.CascadeSlot] > 0)
+                    if (bucket[InternalEnumerator.CascadeSlot] > 0)
                         TCallback.OnFullBucket(ref data, ref bucket);
                     else {
                         TCallback.OnNoMatch(ref data, ref bucket);
                         break;
                     }
                 } else {
-                    TCallback.OnMatch(ref data, elementIndex + index, in bucketRegister, index);
+                    TCallback.OnMatch(ref data, elementIndex + index, in bucket, index);
                     break;
                 }
 
