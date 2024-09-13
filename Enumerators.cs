@@ -136,8 +136,6 @@ namespace SimdDictionary {
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    if (_valueIndex < 0)
-                        throw new InvalidOperationException("No value");
                     return _keys[_valueIndex];
                 }
             }
@@ -145,8 +143,6 @@ namespace SimdDictionary {
             public V CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    if (_valueIndex < 0)
-                        throw new InvalidOperationException("No value");
                     return _values[_valueIndex];
                 }
             }
@@ -154,8 +150,6 @@ namespace SimdDictionary {
             public KeyValuePair<K, V> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    if (_valueIndex < 0)
-                        throw new InvalidOperationException("No value");
                     return new KeyValuePair<K, V>(_keys[_valueIndex], _values[_valueIndex]);
                 }
             }

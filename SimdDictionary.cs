@@ -281,9 +281,11 @@ namespace SimdDictionary {
 
         public SimdDictionary (SimdDictionary<K, V> source) 
             : this (source.Count, source.Comparer) {
+            _Count = source.Count;
             // FIXME: Optimize this
             foreach (var kvp in source)
-                Add(kvp.Key, kvp.Value);
+                if (TryInsert(kvp.Key, kvp.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                    throw new Exception();
         }
 
         static int AdjustCapacity (int capacity) {
@@ -478,6 +480,7 @@ namespace SimdDictionary {
         public void Clear () {
             _Count = 0;
             Array.Clear(_Buckets);
+            Array.Clear(_Keys);
             Array.Clear(_Values);
         }
 

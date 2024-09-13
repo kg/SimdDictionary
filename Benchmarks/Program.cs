@@ -16,7 +16,7 @@ namespace Benchmarks {
             // Self-test before running benchmark suite
 
             var rng = new Random(1234);
-            int c = 4096, d = 4096 * 5;
+            int c = 4096, d = 4096 * 100, e = 4096 * 25;
             List<long> keys = new (c),
                 values = new (c);
             var test = new SimdDictionary<long, long>(c);
@@ -46,21 +46,24 @@ namespace Benchmarks {
             var keyList = test.Keys.ToArray();
             var valueList = test.Values.ToArray();
 
-            var copy = new SimdDictionary<long, long>(test);
-            for (int i = 0; i < c; i++)
-                if (!copy.TryGetValue(keys[i], out _))
-                    throw new Exception();
+            for (int j = 0; j < e; j++)
+            {
+                var copy = new SimdDictionary<long, long>(test);
+                for (int i = 0; i < c; i++)
+                    if (!copy.TryGetValue(keys[i], out _))
+                        throw new Exception();
 
-            for (int i = 0; i < c; i++)
-                if (!test.Remove(keys[i]))
-                    throw new Exception();
+                for (int i = 0; i < c; i++)
+                    if (!copy.Remove(keys[i]))
+                        throw new Exception();
 
-            for (int i = 0; i < c; i++)
-                if (test.TryGetValue(keys[i], out _))
-                    throw new Exception();
+                for (int i = 0; i < c; i++)
+                    if (copy.TryGetValue(keys[i], out _))
+                        throw new Exception();
 
-            if (test.Count != 0)
-                throw new Exception();
+                if (copy.Count != 0)
+                    throw new Exception();
+            }
 
             // Run benchmark suite
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
