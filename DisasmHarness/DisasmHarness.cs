@@ -17,4 +17,8 @@ public static class DisasmHarness
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryAdd () =>
         Dict.TryInsert(0, 1, SimdDictionary<long, long>.InsertMode.EnsureUnique) == SimdDictionary<long, long>.InsertResult.OkAddedNew;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool TryRemove () =>
+        Dict.Remove(0);
 }

@@ -2,3 +2,4 @@
 
 DisasmHarness.TryAdd();
 DisasmHarness.TryGetValue();
+DisasmHarness.TryRemove();
