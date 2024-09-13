@@ -63,6 +63,15 @@ namespace SimdDictionary {
             SuffixSalt = 0b10000000,
             BucketSizeU = 14;
 
+        internal interface IFindCallback<TData>
+            where TData : struct
+        {
+            abstract static void OnMatch (ref TData data, ref InternalEnumerator enumerator, K needle, int indexInBucket);
+            abstract static void OnNoMatch (ref TData data, ref InternalEnumerator enumerator, K needle, byte suffix);
+            abstract static void OnFullBucket (ref TData data, ref InternalEnumerator enumerator);
+            abstract static void OnLoopTermination (ref TData data);
+        }
+
         internal ref struct InternalEnumerator {
             public const int CountSlot = 14,
                 CascadeSlot = 15;
@@ -246,6 +255,25 @@ namespace SimdDictionary {
                 ref self._Values[ElementIndex + index];
         }
 
+        internal class FindValueCallback : IFindCallback<int> {
+            private FindValueCallback () {
+            }
+
+            public static void OnMatch (ref int data, ref InternalEnumerator enumerator, K needle, int indexInBucket) {
+                data = enumerator.ElementIndex + indexInBucket;
+            }
+
+            public static void OnNoMatch (ref int data, ref InternalEnumerator enumerator, K needle, byte suffix) {
+                data = -1;
+            }
+
+            public static void OnFullBucket (ref int data, ref InternalEnumerator enumerator) {
+            }
+
+            public static void OnLoopTermination (ref int data) {
+            }
+        }
+
         public readonly KeyCollection Keys;
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
@@ -367,25 +395,39 @@ namespace SimdDictionary {
             unchecked((byte)((hashCode >> 24) | SuffixSalt));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref V FindValue (K needle) {
+        internal void FindBucketForKey<TCallback, TData> (ref TData data, K key)
+            where TData : struct
+            where TCallback : IFindCallback<TData> 
+        {
             if (_Count == 0)
-                return ref Unsafe.NullRef<V>();
+                return;
 
+            var comparer = Comparer;
+            var hashCode = GetHashCode(comparer, key);
+            var suffix = GetHashSuffix(hashCode);
+            var enumerator = new InternalEnumerator(this, hashCode);
+            /*
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, needle);
             var suffix = GetHashSuffix(hashCode);
             var enumerator = new InternalEnumerator(this, hashCode);
+            */
 
             do {
-                var indexInBucket = enumerator.ScanBucket(comparer, needle, suffix);
+                var indexInBucket = enumerator.ScanBucket(comparer, key, suffix);
                 // FIXME: Find a way to do a single comparison here instead of 2? Not sure if there's a good option.
-                if (indexInBucket < BucketSizeI)
-                    return ref enumerator.Value(this, indexInBucket);
-                else if (indexInBucket == (int)ScanBucketResult.NoOverflow)
-                    return ref Unsafe.NullRef<V>();
+                if (indexInBucket < BucketSizeI) {
+                    TCallback.OnMatch(ref data, ref enumerator, key, indexInBucket);
+                    return;
+                } else if (indexInBucket == (int)ScanBucketResult.NoOverflow) {
+                    TCallback.OnNoMatch(ref data, ref enumerator, key, suffix);
+                    return;
+                } else if (indexInBucket == (int)ScanBucketResult.Overflowed) {
+                    TCallback.OnFullBucket(ref data, ref enumerator);
+                }
             } while (enumerator.MoveNext());
 
-            return ref Unsafe.NullRef<V>();
+            TCallback.OnLoopTermination(ref data);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -489,7 +531,9 @@ namespace SimdDictionary {
             (value?.Equals(item.Value) == true);
 
         public bool ContainsKey (K key) {
-            return !Unsafe.IsNullRef(ref FindValue(key));
+            var data = -1;
+            FindBucketForKey<FindValueCallback, int>(ref data, key);
+            return data >= 0;
         }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
@@ -556,12 +600,13 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
-            ref var result = ref FindValue(key);
-            if (Unsafe.IsNullRef(ref result)) {
+            var data = -1;
+            FindBucketForKey<FindValueCallback, int>(ref data, key);
+            if (data < 0) {
                 value = default!;
                 return false;
             } else {
-                value = result;
+                value = _Values[data];
                 return true;
             }
         }
