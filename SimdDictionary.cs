@@ -70,7 +70,7 @@ namespace SimdDictionary {
         public readonly KeyCollection Keys;
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
-        private int _Count;
+        private int _Count, _GrowAtCount;
         private Bucket[] _Buckets;
         private K[] _Keys;
         private V[] _Values;
@@ -122,7 +122,9 @@ namespace SimdDictionary {
         public void EnsureCapacity (int capacity) {
             if (capacity < 0)
                 throw new ArgumentOutOfRangeException(nameof(capacity));
-            capacity = AdjustCapacity(capacity * OversizePercentage / 100);
+            checked {
+                capacity = AdjustCapacity((int)((long)capacity * OversizePercentage / 100));
+            }
 
             if ((_Buckets != null) && (Capacity >= capacity))
                 return;
@@ -135,18 +137,15 @@ namespace SimdDictionary {
                 throw new Exception("Internal error: Failed to resize");
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void EnsureSpaceForNewItem () {
-            // FIXME: Maintain good load factor
-            EnsureCapacity(_Count + 1);
-        }
-
         internal bool TryResize (int capacity) {
             var oldCount = _Count;
             var bucketCount = capacity / BucketSizeI;
             var oldBuckets = _Buckets;
             var oldKeys = _Keys;
             var oldValues = _Values;
+            checked {
+                _GrowAtCount = (int)(((long)capacity) * 100 / OversizePercentage);
+            }
             _Buckets = new Bucket[bucketCount];
             _Keys = new K[capacity];
             _Values = new V[capacity];
@@ -283,7 +282,7 @@ namespace SimdDictionary {
         // Public for disasmo
         public InsertResult TryInsert (K key, V value, InsertMode mode) {
             // FIXME: Load factor
-            if ((_Keys == null) || (_Count >= _Keys.Length))
+            if ((_Keys == null) || (_Count >= _GrowAtCount))
                 return InsertResult.NeedToGrow;
 
             var comparer = Comparer;
@@ -382,8 +381,6 @@ namespace SimdDictionary {
         }
 
         public bool TryAdd (K key, V value) {
-            EnsureSpaceForNewItem();
-
         retry:
             var insertResult = TryInsert(key, value, InsertMode.EnsureUnique);
             switch (insertResult) {
