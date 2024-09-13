@@ -17,7 +17,10 @@ namespace SimdDictionary {
     internal unsafe static class BucketExtensions {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte GetSlot (this ref readonly Bucket self, int index) =>
-            self[index];
+            Unsafe.AddByteOffset(ref Unsafe.As<Bucket, byte>(ref Unsafe.AsRef(in self)), index);
+            // the extract-lane opcode this generates is slower than doing a byte load from memory,
+            //  even if we already have the bucket in a register. not sure why.
+            // self[index];
 
         // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -206,10 +209,10 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static int FindKeyInBucket (byte count, Span<K> keys, int elementIndex, int indexInBucket, IEqualityComparer<K>? comparer, K needle) {
+        internal static int FindKeyInVTBucket (byte count, Span<K> keys, int elementIndex, int indexInBucket, K needle) {
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
-            if (typeof(K).IsValueType && (comparer == null)) {
+            if (typeof(K).IsValueType) {
                 // We do this instead of a for-loop so we can skip ReadKey when there's no match,
                 //  which improves performance for missing items and/or hash collisions
                 if (indexInBucket >= count)
@@ -223,17 +226,24 @@ namespace SimdDictionary {
                     key = ref Unsafe.Add(ref key, 1);
                 } while (indexInBucket < count);
             } else {
-                if (indexInBucket >= count)
-                    return -1;
-
-                ref K key = ref keys[elementIndex + indexInBucket];
-                do {
-                    if (comparer!.Equals(needle, key))
-                        return indexInBucket;
-                    indexInBucket++;
-                    key = ref Unsafe.Add(ref key, 1);
-                } while (indexInBucket < count);
+                Environment.FailFast("FindKeyInVTBucket called for non-struct key type");
             }
+
+            return -1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static int FindKeyInBucket (byte count, Span<K> keys, int elementIndex, int indexInBucket, IEqualityComparer<K> comparer, K needle) {
+            if (indexInBucket >= count)
+                return -1;
+
+            ref K key = ref keys[elementIndex + indexInBucket];
+            do {
+                if (comparer.Equals(needle, key))
+                    return indexInBucket;
+                indexInBucket++;
+                key = ref Unsafe.Add(ref key, 1);
+            } while (indexInBucket < count);
 
             return -1;
         }
@@ -254,26 +264,50 @@ namespace SimdDictionary {
             var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
 
-            do {
-                // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
-                // var bucketRegister = bucket;
-                int startIndex = FindSuffixInBucket(bucket, searchVector);
-                int index = FindKeyInBucket(bucket[CountSlot], keys, elementIndex, startIndex, comparer, key);
-                if (index < 0) {
-                    if (bucket[CascadeSlot] == 0)
-                        return -1;
-                } else
-                    return elementIndex + index;
+            // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
+            //  to keep ryujit happy
+            if (typeof(K).IsValueType && (comparer == null)) {
+                // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
+                do {
+                    int startIndex = FindSuffixInBucket(bucket, searchVector);
+                    // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
+                    int index = FindKeyInVTBucket(bucket.GetSlot(CountSlot), keys, elementIndex, startIndex, key);
+                    if (index < 0) {
+                        if (bucket.GetSlot(CascadeSlot) == 0)
+                            return -1;
+                    } else
+                        return elementIndex + index;
 
-                bucketIndex++;
-                if (bucketIndex >= buckets.Length) {
-                    bucketIndex = elementIndex = 0;
-                    bucket = ref buckets[0];
-                } else {
-                    bucket = ref Unsafe.Add(ref bucket, 1);
-                    elementIndex += BucketSizeI;
-                }
-            } while (bucketIndex != initialBucketIndex);
+                    bucketIndex++;
+                    if (bucketIndex >= buckets.Length) {
+                        bucketIndex = elementIndex = 0;
+                        bucket = ref buckets[0];
+                    } else {
+                        bucket = ref Unsafe.Add(ref bucket, 1);
+                        elementIndex += BucketSizeI;
+                    }
+                } while (bucketIndex != initialBucketIndex);
+            } else {
+                do {
+                    int startIndex = FindSuffixInBucket(bucket, searchVector);
+                    // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
+                    int index = FindKeyInBucket(bucket.GetSlot(CountSlot), keys, elementIndex, startIndex, comparer, key);
+                    if (index < 0) {
+                        if (bucket.GetSlot(CascadeSlot) == 0)
+                            return -1;
+                    } else
+                        return elementIndex + index;
+
+                    bucketIndex++;
+                    if (bucketIndex >= buckets.Length) {
+                        bucketIndex = elementIndex = 0;
+                        bucket = ref buckets[0];
+                    } else {
+                        bucket = ref Unsafe.Add(ref bucket, 1);
+                        elementIndex += BucketSizeI;
+                    }
+                } while (bucketIndex != initialBucketIndex);
+            }
 
             return -1;
         }
@@ -299,12 +333,14 @@ namespace SimdDictionary {
             ref var bucket = ref buckets[initialBucketIndex];
 
             do {
-                byte bucketCount = bucket[CountSlot];
+                byte bucketCount = bucket.GetSlot(CountSlot);
                 if (mode != InsertMode.Rehashing) {
-                    // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
-                    // var bucketRegister = bucket;
-                    int startIndex = FindSuffixInBucket(bucket, searchVector);
-                    int index = FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+                    int startIndex = FindSuffixInBucket(bucket, searchVector), index;
+                    if (typeof(K).IsValueType && (comparer == null))
+                        index = FindKeyInVTBucket(bucketCount, keys, elementIndex, startIndex, key);
+                    else
+                        index = FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+
                     if (index >= 0) {
                         if (mode == InsertMode.EnsureUnique)
                             return InsertResult.KeyAlreadyPresent;
@@ -429,7 +465,7 @@ namespace SimdDictionary {
             GetEnumerator();
 
         // Inlining required for disasmo
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Remove (K key) {
             if (_Count <= 0)
                 return false;
@@ -447,11 +483,15 @@ namespace SimdDictionary {
             ref var bucket = ref buckets[initialBucketIndex];
 
             do {
-                byte bucketCount = bucket[CountSlot];
-                // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
-                // var bucketRegister = bucket;
-                int startIndex = FindSuffixInBucket(bucket, searchVector);
-                int index = FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+                byte bucketCount = bucket.GetSlot(CountSlot);
+                int startIndex = FindSuffixInBucket(bucket, searchVector),
+                    index;
+
+                if (typeof(K).IsValueType && (comparer == null))
+                    index = FindKeyInVTBucket(bucketCount, keys, elementIndex, startIndex, key);
+                else
+                    index = FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+
                 if (index >= 0) {
                     unchecked {
                         int replacementIndexInBucket = bucketCount - 1;
@@ -508,7 +548,7 @@ namespace SimdDictionary {
             Remove(item.Key);
 
         // Inlining required for disasmo
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
             var index = FindKey(key);
             if (index < 0) {
