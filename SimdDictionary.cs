@@ -65,15 +65,6 @@ namespace SimdDictionary {
             SuffixSalt = 0b10000000,
             BucketSizeU = 14;
 
-        internal interface IFindCallback<TData>
-            where TData : struct
-        {
-            abstract static void OnMatch (ref TData data, int valueIndex, in Bucket bucket, int indexInBucket);
-            abstract static void OnNoMatch (ref TData data, ref Bucket bucket);
-            abstract static void OnFullBucket (ref TData data, ref Bucket bucket);
-            abstract static void OnLoopTermination (ref TData data, int firstBucketIndex, int finalBucketIndex);
-        }
-
         internal ref struct InternalEnumerator {
             public const int CountSlot = 14,
                 CascadeSlot = 15;
@@ -163,17 +154,16 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static int FindKeyInBucket (Bucket bucket, ref K keys, int elementIndex, int indexInBucket, IEqualityComparer<K>? comparer, K needle) {
+            public static int FindKeyInBucket (byte count, Span<K> keys, int elementIndex, int indexInBucket, IEqualityComparer<K>? comparer, K needle) {
                 // We need to duplicate the loop header logic and move it inside the if, otherwise
                 //  count gets spilled to the stack.
                 if (typeof(K).IsValueType && (comparer == null)) {
                     // We do this instead of a for-loop so we can skip ReadKey when there's no match,
                     //  which improves performance for missing items and/or hash collisions
-                    int count = bucket[CountSlot];
                     if (indexInBucket >= count)
                         return -1;
 
-                    ref K key = ref Unsafe.Add(ref keys, indexInBucket);
+                    ref K key = ref keys[elementIndex + indexInBucket];
                     do {
                         if (EqualityComparer<K>.Default.Equals(needle, key))
                             return indexInBucket;
@@ -181,11 +171,10 @@ namespace SimdDictionary {
                         key = ref Unsafe.Add(ref key, 1);
                     } while (indexInBucket < count);
                 } else {
-                    int count = bucket[CountSlot];
                     if (indexInBucket >= count)
                         return -1;
 
-                    ref K key = ref Unsafe.Add(ref keys, indexInBucket);
+                    ref K key = ref keys[elementIndex + indexInBucket];
                     do {
                         if (comparer!.Equals(needle, key))
                             return indexInBucket;
@@ -208,7 +197,7 @@ namespace SimdDictionary {
                 // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
                 var bucket = Bucket;
                 int startIndex = FindSuffixInBucket(bucket, Vector128.Create(suffix));
-                int index = FindKeyInBucket(bucket, ref Keys[ElementIndex], ElementIndex, startIndex, comparer, needle);
+                int index = FindKeyInBucket(bucket[CountSlot], Keys, ElementIndex, startIndex, comparer, needle);
                 if (index < 0)
                     return bucket[CascadeSlot] > 0
                         ? (int)ScanBucketResult.Overflowed
@@ -265,29 +254,6 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ref V Value (SimdDictionary<K, V> self, int index) =>
                 ref self._Values[ElementIndex + index];
-        }
-
-        internal class FindValueCallback : IFindCallback<int> {
-            private FindValueCallback () {
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void OnMatch (ref int data, int valueIndex, in Bucket bucket, int indexInBucket) {
-                data = valueIndex;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void OnNoMatch (ref int data, ref Bucket bucket) {
-                data = -1;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void OnFullBucket (ref int data, ref Bucket bucket) {
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void OnLoopTermination (ref int data, int firstBucketIndex, int finalBucketIndex) {
-            }
         }
 
         public readonly KeyCollection Keys;
@@ -411,12 +377,9 @@ namespace SimdDictionary {
             unchecked((byte)((hashCode >> 24) | SuffixSalt));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void FindBucketForKey<TCallback, TData> (ref TData data, K key)
-            where TData : struct
-            where TCallback : IFindCallback<TData> 
-        {
+        internal int FindKey (K key) {
             if (_Count == 0)
-                return;
+                return -1;
 
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
@@ -433,18 +396,12 @@ namespace SimdDictionary {
                 // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
                 // var bucketRegister = bucket;
                 int startIndex = InternalEnumerator.FindSuffixInBucket(bucket, searchVector);
-                int index = InternalEnumerator.FindKeyInBucket(bucket, ref keys[elementIndex], elementIndex, startIndex, comparer, key);
+                int index = InternalEnumerator.FindKeyInBucket(bucket[InternalEnumerator.CountSlot], keys, elementIndex, startIndex, comparer, key);
                 if (index < 0) {
-                    if (bucket[InternalEnumerator.CascadeSlot] > 0)
-                        TCallback.OnFullBucket(ref data, ref bucket);
-                    else {
-                        TCallback.OnNoMatch(ref data, ref bucket);
-                        break;
-                    }
-                } else {
-                    TCallback.OnMatch(ref data, elementIndex + index, in bucket, index);
-                    break;
-                }
+                    if (bucket[InternalEnumerator.CascadeSlot] == 0)
+                        return -1;
+                } else
+                    return elementIndex + index;
 
                 bucketIndex++;
                 if (bucketIndex >= buckets.Length) {
@@ -456,7 +413,7 @@ namespace SimdDictionary {
                 }
             } while (bucketIndex != initialBucketIndex);
 
-            TCallback.OnLoopTermination(ref data, initialBucketIndex, bucketIndex);
+            return -1;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -468,35 +425,67 @@ namespace SimdDictionary {
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
-            var enumerator = new InternalEnumerator(this, hashCode);
+            var buckets = (Span<Bucket>)_Buckets;
+            var keys = (Span<K>)_Keys;
+            var values = (Span<V>)_Values;
+            var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+            var bucketIndex = initialBucketIndex;
+            var elementIndex = bucketIndex * BucketSizeI;
+            var searchVector = Vector128.Create(suffix);
+            ref var bucket = ref buckets[initialBucketIndex];
 
             do {
+                byte bucketCount = bucket[InternalEnumerator.CountSlot];
                 if (mode != InsertMode.Rehashing) {
-                    var indexInBucket = enumerator.ScanBucket(comparer, key, suffix);
-                    if (indexInBucket < BucketSizeI) {
+                    // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
+                    // var bucketRegister = bucket;
+                    int startIndex = InternalEnumerator.FindSuffixInBucket(bucket, searchVector);
+                    int index = InternalEnumerator.FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+                    if (index >= 0) {
                         if (mode == InsertMode.EnsureUnique)
                             return InsertResult.KeyAlreadyPresent;
                         else {
                             if (mode == InsertMode.OverwriteKeyAndValue)
-                                enumerator.Key(indexInBucket) = key;
-                            enumerator.Value(this, indexInBucket) = value;
+                                keys[index] = key;
+                            values[index] = value;
                             return InsertResult.OkOverwroteExisting;
                         }
                     }
                 }
 
-                var newIndexInBucket = enumerator.BucketCount;
-                if (newIndexInBucket < BucketSizeU) {
-                    enumerator.BucketCount = (byte)(newIndexInBucket + 1);
-                    enumerator.Bucket.SetSlot(newIndexInBucket, suffix);
-                    enumerator.Key(newIndexInBucket) = key;
-                    enumerator.Value(this, newIndexInBucket) = value;
-                    if (enumerator.InitialBucketIndex != enumerator.BucketIndex)
-                        enumerator.AdjustCascadeCounts(true);
+                if (bucketCount < BucketSizeU) {
+                    unchecked {
+                        var valueIndex = elementIndex + bucketCount;
+                        bucket.SetSlot(InternalEnumerator.CountSlot, (byte)(bucketCount + 1));
+                        bucket.SetSlot(bucketCount, suffix);
+                        keys[valueIndex] = key;
+                        values[valueIndex] = value;
+                    }
+
+                    // We may have cascaded out of a previous bucket; if so, scan backwards and update
+                    //  the cascade count for every bucket we previously scanned.
+                    while (bucketIndex != initialBucketIndex) {
+                        bucketIndex--;
+                        if (bucketIndex < 0)
+                            bucketIndex = buckets.Length - 1;
+                        bucket = ref buckets[bucketIndex];
+                        var cascadeCount = bucket[InternalEnumerator.CascadeSlot];
+                        if (cascadeCount < 255)
+                            bucket.SetSlot(InternalEnumerator.CascadeSlot, (byte)(cascadeCount + 1));
+                    }
+
                     return InsertResult.OkAddedNew;
-                } else
-                    ;
-            } while (enumerator.MoveNext());
+                }
+
+                bucketIndex++;
+                if (bucketIndex >= buckets.Length) {
+                    bucketIndex = elementIndex = 0;
+                    bucket = ref buckets[0];
+                } else {
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                    elementIndex += BucketSizeI;
+                }
+            } while (bucketIndex != initialBucketIndex);
 
             // FIXME: This shouldn't be possible
             return InsertResult.NeedToGrow;
@@ -559,11 +548,8 @@ namespace SimdDictionary {
             TryGetValue(item.Key, out var value) &&
             (value?.Equals(item.Value) == true);
 
-        public bool ContainsKey (K key) {
-            var data = -1;
-            FindBucketForKey<FindValueCallback, int>(ref data, key);
-            return data >= 0;
-        }
+        public bool ContainsKey (K key) =>
+            FindKey(key) >= 0;
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
             using (var e = GetEnumerator())
@@ -629,13 +615,12 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
-            var data = -1;
-            FindBucketForKey<FindValueCallback, int>(ref data, key);
-            if (data < 0) {
+            var index = FindKey(key);
+            if (index < 0) {
                 value = default!;
                 return false;
             } else {
-                value = _Values[data];
+                value = _Values[index];
                 return true;
             }
         }
