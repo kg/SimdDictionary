@@ -68,10 +68,10 @@ namespace SimdDictionary {
         internal interface IFindCallback<TData>
             where TData : struct
         {
-            abstract static void OnMatch (ref TData data, ref InternalEnumerator enumerator, K needle, int indexInBucket);
-            abstract static void OnNoMatch (ref TData data, ref InternalEnumerator enumerator, K needle, byte suffix);
-            abstract static void OnFullBucket (ref TData data, ref InternalEnumerator enumerator);
-            abstract static void OnLoopTermination (ref TData data);
+            abstract static void OnMatch (ref TData data, int valueIndex, in Bucket bucket, int indexInBucket);
+            abstract static void OnNoMatch (ref TData data, ref Bucket bucket);
+            abstract static void OnFullBucket (ref TData data, ref Bucket bucket);
+            abstract static void OnLoopTermination (ref TData data, int firstBucketIndex, int finalBucketIndex);
         }
 
         internal ref struct InternalEnumerator {
@@ -271,18 +271,18 @@ namespace SimdDictionary {
             private FindValueCallback () {
             }
 
-            public static void OnMatch (ref int data, ref InternalEnumerator enumerator, K needle, int indexInBucket) {
-                data = enumerator.ElementIndex + indexInBucket;
+            public static void OnMatch (ref int data, int valueIndex, in Bucket bucket, int indexInBucket) {
+                data = valueIndex;
             }
 
-            public static void OnNoMatch (ref int data, ref InternalEnumerator enumerator, K needle, byte suffix) {
+            public static void OnNoMatch (ref int data, ref Bucket bucket) {
                 data = -1;
             }
 
-            public static void OnFullBucket (ref int data, ref InternalEnumerator enumerator) {
+            public static void OnFullBucket (ref int data, ref Bucket bucket) {
             }
 
-            public static void OnLoopTermination (ref int data) {
+            public static void OnLoopTermination (ref int data, int firstBucketIndex, int finalBucketIndex) {
             }
         }
 
@@ -417,29 +417,41 @@ namespace SimdDictionary {
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
-            var enumerator = new InternalEnumerator(this, hashCode);
-            /*
-            var comparer = Comparer;
-            var hashCode = GetHashCode(comparer, needle);
-            var suffix = GetHashSuffix(hashCode);
-            var enumerator = new InternalEnumerator(this, hashCode);
-            */
+            var buckets = (Span<Bucket>)_Buckets;
+            var keys = (Span<K>)_Keys;
+            var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+            var bucketIndex = initialBucketIndex;
+            var elementIndex = bucketIndex * BucketSizeI;
+            ref var bucket = ref buckets[initialBucketIndex];
 
             do {
-                var indexInBucket = enumerator.ScanBucket(comparer, key, suffix);
-                // FIXME: Find a way to do a single comparison here instead of 2? Not sure if there's a good option.
-                if (indexInBucket < BucketSizeI) {
-                    TCallback.OnMatch(ref data, ref enumerator, key, indexInBucket);
-                    return;
-                } else if (indexInBucket == (int)ScanBucketResult.NoOverflow) {
-                    TCallback.OnNoMatch(ref data, ref enumerator, key, suffix);
-                    return;
-                } else if (indexInBucket == (int)ScanBucketResult.Overflowed) {
-                    TCallback.OnFullBucket(ref data, ref enumerator);
+                // Eagerly load the bucket into a local, otherwise each reference to 'Bucket' will do an indirect load
+                var bucketRegister = bucket;
+                int startIndex = InternalEnumerator.FindSuffixInBucket(bucketRegister, suffix);
+                int index = InternalEnumerator.FindKeyInBucket(bucketRegister, keys, elementIndex, startIndex, comparer, key);
+                if (index < 0) {
+                    if (bucketRegister[InternalEnumerator.CascadeSlot] > 0)
+                        TCallback.OnFullBucket(ref data, ref bucket);
+                    else {
+                        TCallback.OnNoMatch(ref data, ref bucket);
+                        break;
+                    }
+                } else {
+                    TCallback.OnMatch(ref data, elementIndex + index, in bucketRegister, index);
+                    break;
                 }
-            } while (enumerator.MoveNext());
 
-            TCallback.OnLoopTermination(ref data);
+                bucketIndex++;
+                if (bucketIndex >= buckets.Length) {
+                    bucketIndex = elementIndex = 0;
+                    bucket = ref buckets[0];
+                } else {
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                    elementIndex += BucketSizeI;
+                }
+            } while (bucketIndex != initialBucketIndex);
+
+            TCallback.OnLoopTermination(ref data, initialBucketIndex, bucketIndex);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
