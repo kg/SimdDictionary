@@ -8,6 +8,7 @@ using BenchmarkDotNet.Environments;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
+using System.Diagnostics;
 using SimdDictionary;
 
 namespace Benchmarks {
@@ -16,14 +17,22 @@ namespace Benchmarks {
             // Self-test before running benchmark suite
 
             var rng = new Random(1234);
-            int c = 4096, d = 4096 * 100, e = 4096 * 25;
+            int c = 4096, d = 4096 * (Debugger.IsAttached ? 5 : 100), e = 4096 * (Debugger.IsAttached ? 1 : 25);
             List<long> keys = new (c),
+                unusedKeys = new (c),
                 values = new (c);
             var test = new SimdDictionary<long, long>(c);
 
             for (int i = 0; i < c; i++) {
                 keys.Add(rng.NextInt64());
                 values.Add(i * 2 + 1);
+            }
+
+            for (int i = 0; i < c; i++) {
+                var unusedKey = rng.NextInt64();
+                while (keys.Contains(unusedKey))
+                    unusedKey = rng.NextInt64();
+                unusedKeys.Add(unusedKey);
             }
 
             for (int i = 0; i < c; i++)
@@ -51,6 +60,10 @@ namespace Benchmarks {
                 var copy = new SimdDictionary<long, long>(test);
                 for (int i = 0; i < c; i++)
                     if (!copy.TryGetValue(keys[i], out _))
+                        throw new Exception();
+
+                for (int i = 0; i < c; i++)
+                    if (copy.Remove(unusedKeys[i]))
                         throw new Exception();
 
                 for (int i = 0; i < c; i++)

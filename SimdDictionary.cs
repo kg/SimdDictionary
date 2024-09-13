@@ -149,6 +149,7 @@ namespace SimdDictionary {
             _Buckets = new Bucket[bucketCount];
             _Keys = new K[capacity];
             _Values = new V[capacity];
+            // FIXME: In-place rehashing
             if (oldBuckets != null)
                 if (!TryRehash(oldBuckets, oldKeys, oldValues))
                     return false;
@@ -160,7 +161,7 @@ namespace SimdDictionary {
                 ref var bucket = ref oldBuckets[i];
                 var baseIndex = i * BucketSizeU;
 
-                for (int j = 0, c = bucket.GetSlot((int)CountSlot); j < c; j++) {
+                for (int j = 0, c = bucket.GetSlot(CountSlot); j < c; j++) {
                     if (bucket.GetSlot(j) == 0)
                         continue;
 
@@ -370,7 +371,7 @@ namespace SimdDictionary {
         ICollection<V> IDictionary<K, V>.Values => Values;
 
         public int Count => _Count;
-        public int Capacity => _Buckets.Length * BucketSizeI;
+        public int Capacity => _GrowAtCount;
 
         bool ICollection<KeyValuePair<K, V>>.IsReadOnly => false;
 
@@ -388,7 +389,7 @@ namespace SimdDictionary {
                     _Count++;
                     return true;
                 case InsertResult.NeedToGrow:
-                    TryResize(Capacity + 1);
+                    TryResize(_Count + 1);
                     goto retry;
                 default:
                     return false;
@@ -428,7 +429,7 @@ namespace SimdDictionary {
             GetEnumerator();
 
         // Inlining required for disasmo
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public bool Remove (K key) {
             if (_Count <= 0)
                 return false;
@@ -486,6 +487,9 @@ namespace SimdDictionary {
                     return true;
                 }
 
+                if (bucket[CascadeSlot] == 0)
+                    return false;
+
                 bucketIndex++;
                 if (bucketIndex >= buckets.Length) {
                     bucketIndex = elementIndex = 0;
@@ -504,7 +508,7 @@ namespace SimdDictionary {
             Remove(item.Key);
 
         // Inlining required for disasmo
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public bool TryGetValue (K key, out V value) {
             var index = FindKey(key);
             if (index < 0) {
