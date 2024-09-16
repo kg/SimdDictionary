@@ -168,11 +168,11 @@ namespace SimdDictionary {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool MoveNext () {
-                _valueIndex++;
                 _valueIndexLocal++;
 
                 while (_bucketIndex < _buckets.Length) {
-                    if (_valueIndexLocal >= BucketSizeI) {
+                    var count = _currentBucket.GetSlot(CountSlot);
+                    if (_valueIndexLocal >= count) {
                         _valueIndexLocal = 0;
                         _bucketIndex++;
                         if (_bucketIndex >= _buckets.Length)
@@ -182,12 +182,13 @@ namespace SimdDictionary {
 
                     // We iterate over the whole bucket including empty slots to keep the indices in sync
                     // FIXME: It would be faster to only iterate occupied slots and then skip based on count
-                    while (_valueIndexLocal < BucketSizeI) {
+                    while (_valueIndexLocal < count) {
                         var suffix = _currentBucket.GetSlot(_valueIndexLocal);
-                        if (suffix != 0)
+                        if (suffix != 0) {
+                            _valueIndex = (_bucketIndex * BucketSizeI) + _valueIndexLocal;
                             return true;
+                        }
                         _valueIndexLocal++;
-                        _valueIndex++;
                     }
                 }
 
