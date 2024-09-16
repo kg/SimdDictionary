@@ -81,8 +81,8 @@ namespace SimdDictionary {
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
         private int _Count, _GrowAtCount;
-        private Bucket[] _Buckets;
-        private Entry[] _Entries;
+        private Bucket[]? _Buckets;
+        private Entry[]? _Entries;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -97,9 +97,6 @@ namespace SimdDictionary {
         }
 
         public SimdDictionary (int capacity, IEqualityComparer<K>? comparer) {
-            Unsafe.SkipInit(out _Buckets);
-            Unsafe.SkipInit(out _Entries);
-
             if (typeof(K).IsValueType)
                 Comparer = comparer;
             else if (typeof(K) == typeof(string))
@@ -117,7 +114,7 @@ namespace SimdDictionary {
             // FIXME: Optimize this
             foreach (var kvp in source)
                 if (TryInsert(kvp.Key, kvp.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
-                    throw new Exception();
+                    Environment.FailFast("Failed to insert key/value pair while copying dictionary");
         }
 
         static int AdjustCapacity (int capacity) {
@@ -143,11 +140,10 @@ namespace SimdDictionary {
                 ? capacity
                 : Capacity * 2;
 
-            if (!TryResize(Math.Max(capacity, nextIncrement)))
-                throw new Exception("Internal error: Failed to resize");
+            Resize(Math.Max(capacity, nextIncrement));
         }
 
-        internal bool TryResize (int capacity) {
+        internal void Resize (int capacity) {
             checked {
                 capacity = AdjustCapacity((int)((long)capacity * OversizePercentage / 100));
             }
@@ -163,10 +159,9 @@ namespace SimdDictionary {
             _Buckets = new Bucket[bucketCount];
             _Entries = new Entry[actualCapacity];
             // FIXME: In-place rehashing
-            if ((oldBuckets != null) && (oldBuckets.Length > 0))
+            if ((oldBuckets != null) && (oldBuckets.Length > 0) && (oldEntries != null))
                 if (!TryRehash(oldBuckets, oldEntries))
-                    return false;
-            return true;
+                    Environment.FailFast("Failed to rehash dictionary for resize operation");
         }
 
         internal bool TryRehash (Bucket[] _oldBuckets, Entry[] _oldEntries) {
@@ -219,14 +214,17 @@ namespace SimdDictionary {
                 var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
                     (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
                 return BitOperations.TrailingZeroCount(bits);
-            } else
+            } else {
                 // FIXME: Scalar implementation like dn_simdhash's
-                throw new NotImplementedException();
+                Environment.FailFast("Scalar search not implemented");
+                return 32;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static ref Entry FindKeyInBucketWithDefaultComparer (byte count, ref Entry firstEntryInBucket, int indexInBucket, K needle) {
             Debug.Assert(indexInBucket >= 0);
+            Debug.Assert(count <= BucketSizeI);
 
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
@@ -253,6 +251,8 @@ namespace SimdDictionary {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static ref Entry FindKeyInBucket (byte count, ref Entry firstEntryInBucket, int indexInBucket, IEqualityComparer<K> comparer, K needle) {
             Debug.Assert(indexInBucket >= 0);
+            Debug.Assert(count <= BucketSizeI);
+            Debug.Assert(comparer != null);
 
             if (indexInBucket >= count)
                 return ref Unsafe.NullRef<Entry>();
@@ -310,10 +310,11 @@ namespace SimdDictionary {
                     }
                 } while (bucketIndex != initialBucketIndex);
             } else {
+                Debug.Assert(comparer != null);
                 do {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, comparer, key);
+                    ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, comparer!, key);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
                             return ref Unsafe.NullRef<Entry>();
@@ -415,7 +416,7 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
                 if (!TryGetValue(key, out var result))
-                    throw new KeyNotFoundException();
+                    throw new KeyNotFoundException($"Key not found: {key}");
                 else
                     return result;
             }
@@ -445,7 +446,7 @@ namespace SimdDictionary {
                     _Count++;
                     return true;
                 case InsertResult.NeedToGrow:
-                    TryResize(_GrowAtCount * 2);
+                    Resize(_GrowAtCount * 2);
                     goto retry;
                 default:
                     return false;
@@ -457,8 +458,9 @@ namespace SimdDictionary {
 
         public void Clear () {
             _Count = 0;
-            Array.Clear(_Buckets);
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+            if (_Buckets != null)
+                Array.Clear(_Buckets);
+            if ((_Entries != null) && RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                 Array.Clear(_Entries);
         }
 
@@ -510,14 +512,17 @@ namespace SimdDictionary {
                 ref var entry = ref 
                     (typeof(K).IsValueType && (comparer == null))
                         ? ref FindKeyInBucketWithDefaultComparer(bucketCount, ref firstBucketEntry, startIndex, key)
-                        : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer, key);
+                        : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer!, key);
 
                 if (!Unsafe.IsNullRef(ref entry)) {
                     Debug.Assert(bucketCount > 0);
 
                     unchecked {
+#pragma warning disable CS8500
                         // FIXME: Why isn't there an Unsafe.Offset?
                         int indexInBucket = (int)(Unsafe.ByteOffset(ref firstBucketEntry, ref entry) / sizeof(Entry));
+                        Debug.Assert((Unsafe.ByteOffset(ref firstBucketEntry, ref entry) % sizeof(Entry)) == 0);
+#pragma warning restore CS8500
                         int replacementIndexInBucket = bucketCount - 1;
                         bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
                         bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
@@ -539,7 +544,7 @@ namespace SimdDictionary {
 
                         var cascadeCount = bucket[CascadeSlot];
                         if (cascadeCount == 0)
-                            throw new Exception();
+                            Environment.FailFast("Corrupted dictionary bucket cascade slot");
                         // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
                         //  so it's no longer safe to decrement. This is a very rare scenario.
                         else if (cascadeCount < 255)

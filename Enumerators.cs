@@ -129,12 +129,14 @@ namespace SimdDictionary {
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
             private int _bucketIndex, _valueIndex, _valueIndexLocal;
             private Bucket _currentBucket;
-            private Bucket[] _buckets;
-            private Entry[] _entries;
+            private Bucket[]? _buckets;
+            private Entry[]? _entries;
 
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
+                    if (_entries == null)
+                        throw new InvalidOperationException();
                     return _entries[_valueIndex].Key;
                 }
             }
@@ -142,6 +144,8 @@ namespace SimdDictionary {
             public V CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
+                    if (_entries == null)
+                        throw new InvalidOperationException();
                     return _entries[_valueIndex].Value;
                 }
             }
@@ -149,6 +153,8 @@ namespace SimdDictionary {
             public KeyValuePair<K, V> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
+                    if (_entries == null)
+                        throw new InvalidOperationException();
                     ref var entry = ref _entries[_valueIndex];
                     return new KeyValuePair<K, V>(entry.Key, entry.Value);
                 }
