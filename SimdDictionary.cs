@@ -192,6 +192,8 @@ namespace SimdDictionary {
             return unchecked((uint)comparer!.GetHashCode(key!));
         }
 
+        // The hash suffix is selected from 8 bits of the hash, and then modified to ensure
+        //  it is never zero (because a zero suffix indicates an empty slot.)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static byte GetHashSuffix (uint hashCode) {
             // The bottom bits of the hash form the bucket index, so we
@@ -203,6 +205,10 @@ namespace SimdDictionary {
             //  resistance and reducing the odds of having to check multiple keys.
             return result == 0 ? (byte)255 : result;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
+            unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
@@ -282,7 +288,7 @@ namespace SimdDictionary {
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
-            var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var bucketIndex = initialBucketIndex;
             var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
@@ -353,7 +359,7 @@ namespace SimdDictionary {
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
-            var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var bucketIndex = initialBucketIndex;
             var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
@@ -505,7 +511,7 @@ namespace SimdDictionary {
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
-            var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var bucketIndex = initialBucketIndex;
             var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
