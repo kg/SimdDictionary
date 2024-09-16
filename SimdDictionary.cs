@@ -125,9 +125,8 @@ namespace SimdDictionary {
         public void EnsureCapacity (int capacity) {
             if (capacity < 0)
                 throw new ArgumentOutOfRangeException(nameof(capacity));
-            checked {
-                capacity = AdjustCapacity((int)((long)capacity * OversizePercentage / 100));
-            }
+            else if (capacity == 0)
+                return;
 
             if ((_Buckets != null) && (Capacity >= capacity))
                 return;
@@ -141,27 +140,32 @@ namespace SimdDictionary {
         }
 
         internal bool TryResize (int capacity) {
+            checked {
+                capacity = AdjustCapacity((int)((long)capacity * OversizePercentage / 100));
+            }
+
             var oldCount = _Count;
-            var bucketCount = capacity / BucketSizeI;
+            var bucketCount = (capacity + BucketSizeI - 1) / BucketSizeI;
+            var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
             var oldKeys = _Keys;
             var oldValues = _Values;
             checked {
-                _GrowAtCount = (int)(((long)capacity) * 100 / OversizePercentage);
+                _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
             _Buckets = new Bucket[bucketCount];
-            _Keys = new K[capacity];
-            _Values = new V[capacity];
+            _Keys = new K[actualCapacity];
+            _Values = new V[actualCapacity];
             // FIXME: In-place rehashing
-            if (oldBuckets != null)
+            if ((oldBuckets != null) && (oldBuckets.Length > 0))
                 if (!TryRehash(oldBuckets, oldKeys, oldValues))
                     return false;
             return true;
         }
 
         internal bool TryRehash (Bucket[] oldBuckets, K[] oldKeys, V[] oldValues) {
+            ref var bucket = ref oldBuckets[0];
             for (uint i = 0; i < oldBuckets.Length; i++) {
-                ref var bucket = ref oldBuckets[i];
                 var baseIndex = i * BucketSizeU;
 
                 for (int j = 0, c = bucket.GetSlot(CountSlot); j < c; j++) {
@@ -171,6 +175,8 @@ namespace SimdDictionary {
                     if (TryInsert(oldKeys[baseIndex + j], oldValues[baseIndex + j], InsertMode.Rehashing) != InsertResult.OkAddedNew)
                         return false;
                 }
+
+                bucket = ref Unsafe.Add(ref bucket, 1);
             }
 
             return true;
@@ -425,7 +431,7 @@ namespace SimdDictionary {
                     _Count++;
                     return true;
                 case InsertResult.NeedToGrow:
-                    TryResize(_Count + 1);
+                    TryResize(_GrowAtCount * 2);
                     goto retry;
                 default:
                     return false;

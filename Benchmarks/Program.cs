@@ -21,7 +21,8 @@ namespace Benchmarks {
             List<long> keys = new (c),
                 unusedKeys = new (c),
                 values = new (c);
-            var test = new SimdDictionary<long, long>(c);
+            // Don't pre-allocate capacity, so that we check growth/rehashing
+            var test = new SimdDictionary<long, long>(0);
 
             for (int i = 0; i < c; i++) {
                 keys.Add(rng.NextInt64());
