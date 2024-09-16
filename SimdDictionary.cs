@@ -281,8 +281,12 @@ namespace SimdDictionary {
             if (indexInBucket >= count)
                 return ref Unsafe.NullRef<Entry>();
 
+            // FIXME: Load comparer field on-demand here to optimize the 'no match' case?
             ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
             do {
+                // FIXME: SCG.Dictionary does a hashcode comparison first, but we don't store the hashcode in the entry.
+                // For expensive comparers, it might be necessary to do this. But the suffix encodes 8 bits of the hash, and
+                //  the bucket index encodes another few bits as well, so it is less necessary than it is in SCG.Dictionary
                 if (comparer.Equals(needle, entry.Key))
                     return ref entry;
                 indexInBucket++;
@@ -300,13 +304,20 @@ namespace SimdDictionary {
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
+            Debug.Assert(_Buckets != null);
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+            // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
+            //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
-            var bucketIndex = initialBucketIndex;
             var searchVector = Vector128.Create(suffix);
-            ref var bucket = ref buckets[initialBucketIndex];
+            // FIXME: There are two range checks here for buckets, first initialBucketIndex and then buckets.Length - 1.
+            // We know by definition that buckets.Length - 1 can't fail the range check as long as the bucket count is more than 0,
+            //  and we always allocate at least one bucket. So we can probably optimize the range check out somehow.
+            ref Bucket initialBucket = ref buckets[initialBucketIndex],
+                bucket = ref initialBucket,
+                lastBucket = ref buckets[buckets.Length - 1];
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
@@ -323,16 +334,14 @@ namespace SimdDictionary {
                     } else
                         return ref entry;
 
-                    bucketIndex++;
-                    if (bucketIndex >= buckets.Length) {
-                        bucketIndex = 0;
+                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
                         bucket = ref buckets[0];
                         firstBucketEntry = ref entries[0];
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
                         firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
                     }
-                } while (bucketIndex != initialBucketIndex);
+                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
             } else {
                 Debug.Assert(comparer != null);
                 do {
@@ -345,16 +354,14 @@ namespace SimdDictionary {
                     } else
                         return ref entry;
 
-                    bucketIndex++;
-                    if (bucketIndex >= buckets.Length) {
-                        bucketIndex = 0;
+                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
                         bucket = ref buckets[0];
                         firstBucketEntry = ref entries[0];
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
                         firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
                     }
-                } while (bucketIndex != initialBucketIndex);
+                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
             }
 
             return ref Unsafe.NullRef<Entry>();
