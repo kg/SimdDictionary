@@ -29,6 +29,8 @@ namespace SimdDictionary {
     }
 
     public partial class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
+        internal record struct Entry (K Key, V Value);
+
         public enum InsertMode {
             // Fail the insertion if a matching key is found
             EnsureUnique,
@@ -75,8 +77,7 @@ namespace SimdDictionary {
         public readonly IEqualityComparer<K>? Comparer;
         private int _Count, _GrowAtCount;
         private Bucket[] _Buckets;
-        private K[] _Keys;
-        private V[] _Values;
+        private Entry[] _Entries;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -92,8 +93,7 @@ namespace SimdDictionary {
 
         public SimdDictionary (int capacity, IEqualityComparer<K>? comparer) {
             Unsafe.SkipInit(out _Buckets);
-            Unsafe.SkipInit(out _Keys);
-            Unsafe.SkipInit(out _Values);
+            Unsafe.SkipInit(out _Entries);
             if (typeof(K).IsValueType)
                 Comparer = comparer;
             else
@@ -148,22 +148,20 @@ namespace SimdDictionary {
             var bucketCount = (capacity + BucketSizeI - 1) / BucketSizeI;
             var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
-            var oldKeys = _Keys;
-            var oldValues = _Values;
+            var oldEntries = _Entries;
             checked {
                 _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
             _Buckets = new Bucket[bucketCount];
-            _Keys = new K[actualCapacity];
-            _Values = new V[actualCapacity];
+            _Entries = new Entry[actualCapacity];
             // FIXME: In-place rehashing
             if ((oldBuckets != null) && (oldBuckets.Length > 0))
-                if (!TryRehash(oldBuckets, oldKeys, oldValues))
+                if (!TryRehash(oldBuckets, oldEntries))
                     return false;
             return true;
         }
 
-        internal bool TryRehash (Bucket[] oldBuckets, K[] oldKeys, V[] oldValues) {
+        internal bool TryRehash (Bucket[] oldBuckets, Entry[] oldEntries) {
             ref var bucket = ref oldBuckets[0];
             for (uint i = 0; i < oldBuckets.Length; i++) {
                 var baseIndex = i * BucketSizeU;
@@ -172,7 +170,8 @@ namespace SimdDictionary {
                     if (bucket.GetSlot(j) == 0)
                         continue;
 
-                    if (TryInsert(oldKeys[baseIndex + j], oldValues[baseIndex + j], InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                    ref var entry = ref oldEntries[baseIndex + j];
+                    if (TryInsert(entry.Key, entry.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
                         return false;
                 }
 
@@ -215,55 +214,55 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static int FindKeyInVTBucket (byte count, Span<K> keys, int elementIndex, int indexInBucket, K needle) {
+        internal static ref Entry FindKeyInVTBucket (byte count, Span<Entry> entries, int elementIndex, int indexInBucket, K needle) {
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
             if (typeof(K).IsValueType) {
                 // We do this instead of a for-loop so we can skip ReadKey when there's no match,
                 //  which improves performance for missing items and/or hash collisions
                 if (indexInBucket >= count)
-                    return -1;
+                    return ref Unsafe.NullRef<Entry>();
 
-                ref K key = ref keys[elementIndex + indexInBucket];
+                ref Entry entry = ref entries[elementIndex + indexInBucket];
                 do {
-                    if (EqualityComparer<K>.Default.Equals(needle, key))
-                        return indexInBucket;
+                    if (EqualityComparer<K>.Default.Equals(needle, entry.Key))
+                        return ref entry;
                     indexInBucket++;
-                    key = ref Unsafe.Add(ref key, 1);
+                    entry = ref Unsafe.Add(ref entry, 1);
                 } while (indexInBucket < count);
             } else {
                 Environment.FailFast("FindKeyInVTBucket called for non-struct key type");
             }
 
-            return -1;
+            return ref Unsafe.NullRef<Entry>();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static int FindKeyInBucket (byte count, Span<K> keys, int elementIndex, int indexInBucket, IEqualityComparer<K> comparer, K needle) {
+        internal static ref Entry FindKeyInBucket (byte count, Span<Entry> entries, int elementIndex, int indexInBucket, IEqualityComparer<K> comparer, K needle) {
             if (indexInBucket >= count)
-                return -1;
+                return ref Unsafe.NullRef<Entry>();
 
-            ref K key = ref keys[elementIndex + indexInBucket];
+            ref Entry entry = ref entries[elementIndex + indexInBucket];
             do {
-                if (comparer.Equals(needle, key))
-                    return indexInBucket;
+                if (comparer.Equals(needle, entry.Key))
+                    return ref entry;
                 indexInBucket++;
-                key = ref Unsafe.Add(ref key, 1);
+                entry = ref Unsafe.Add(ref entry, 1);
             } while (indexInBucket < count);
 
-            return -1;
+            return ref Unsafe.NullRef<Entry>();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int FindKey (K key) {
+        internal ref Entry FindKey (K key) {
             if (_Count == 0)
-                return -1;
+                return ref Unsafe.NullRef<Entry>();
 
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var buckets = (Span<Bucket>)_Buckets;
-            var keys = (Span<K>)_Keys;
+            var entries = (Span<Entry>)_Entries;
             var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
             var bucketIndex = initialBucketIndex;
             var elementIndex = bucketIndex * BucketSizeI;
@@ -277,12 +276,12 @@ namespace SimdDictionary {
                 do {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    int index = FindKeyInVTBucket(bucket.GetSlot(CountSlot), keys, elementIndex, startIndex, key);
-                    if (index < 0) {
+                    ref var entry = ref FindKeyInVTBucket(bucket.GetSlot(CountSlot), entries, elementIndex, startIndex, key);
+                    if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
-                            return -1;
+                            return ref Unsafe.NullRef<Entry>();
                     } else
-                        return elementIndex + index;
+                        return ref entry;
 
                     bucketIndex++;
                     if (bucketIndex >= buckets.Length) {
@@ -297,12 +296,12 @@ namespace SimdDictionary {
                 do {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    int index = FindKeyInBucket(bucket.GetSlot(CountSlot), keys, elementIndex, startIndex, comparer, key);
-                    if (index < 0) {
+                    ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), entries, elementIndex, startIndex, comparer, key);
+                    if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
-                            return -1;
+                            return ref Unsafe.NullRef<Entry>();
                     } else
-                        return elementIndex + index;
+                        return ref entry;
 
                     bucketIndex++;
                     if (bucketIndex >= buckets.Length) {
@@ -315,7 +314,7 @@ namespace SimdDictionary {
                 } while (bucketIndex != initialBucketIndex);
             }
 
-            return -1;
+            return ref Unsafe.NullRef<Entry>();
         }
 
         // Inlining required for disasmo
@@ -323,15 +322,14 @@ namespace SimdDictionary {
         // Public for disasmo
         public InsertResult TryInsert (K key, V value, InsertMode mode) {
             // FIXME: Load factor
-            if ((_Keys == null) || (_Count >= _GrowAtCount))
+            if ((_Entries == null) || (_Count >= _GrowAtCount))
                 return InsertResult.NeedToGrow;
 
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var buckets = (Span<Bucket>)_Buckets;
-            var keys = (Span<K>)_Keys;
-            var values = (Span<V>)_Values;
+            var entries = (Span<Entry>)_Entries;
             var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
             var bucketIndex = initialBucketIndex;
             var elementIndex = bucketIndex * BucketSizeI;
@@ -342,18 +340,17 @@ namespace SimdDictionary {
                 byte bucketCount = bucket.GetSlot(CountSlot);
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(bucket, searchVector), index;
-                    if (typeof(K).IsValueType && (comparer == null))
-                        index = FindKeyInVTBucket(bucketCount, keys, elementIndex, startIndex, key);
-                    else
-                        index = FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+                    ref Entry entry = ref (typeof(K).IsValueType && (comparer == null))
+                            ? ref FindKeyInVTBucket(bucketCount, entries, elementIndex, startIndex, key)
+                            : ref FindKeyInBucket(bucketCount, entries, elementIndex, startIndex, comparer!, key);
 
-                    if (index >= 0) {
+                    if (!Unsafe.IsNullRef(ref entry)) {
                         if (mode == InsertMode.EnsureUnique)
                             return InsertResult.KeyAlreadyPresent;
                         else {
                             if (mode == InsertMode.OverwriteKeyAndValue)
-                                keys[index] = key;
-                            values[index] = value;
+                                entry.Key = key;
+                            entry.Value = value;
                             return InsertResult.OkOverwroteExisting;
                         }
                     }
@@ -364,8 +361,7 @@ namespace SimdDictionary {
                         var valueIndex = elementIndex + bucketCount;
                         bucket.SetSlot(CountSlot, (byte)(bucketCount + 1));
                         bucket.SetSlot(bucketCount, suffix);
-                        keys[valueIndex] = key;
-                        values[valueIndex] = value;
+                        entries[valueIndex] = new Entry(key, value);
                     }
 
                     // We may have cascaded out of a previous bucket; if so, scan backwards and update
@@ -444,8 +440,8 @@ namespace SimdDictionary {
         public void Clear () {
             _Count = 0;
             Array.Clear(_Buckets);
-            Array.Clear(_Keys);
-            Array.Clear(_Values);
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                Array.Clear(_Entries);
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) =>
@@ -453,7 +449,7 @@ namespace SimdDictionary {
             (value?.Equals(item.Value) == true);
 
         public bool ContainsKey (K key) =>
-            FindKey(key) >= 0;
+            !Unsafe.IsNullRef(ref FindKey(key));
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
             using (var e = GetEnumerator())
@@ -472,7 +468,8 @@ namespace SimdDictionary {
 
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool Remove (K key) {
+        // Unsafe for sizeof
+        public unsafe bool Remove (K key) {
             if (_Count <= 0)
                 return false;
 
@@ -480,8 +477,7 @@ namespace SimdDictionary {
             var hashCode = GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var buckets = (Span<Bucket>)_Buckets;
-            var keys = (Span<K>)_Keys;
-            var values = (Span<V>)_Values;
+            var entries = (Span<Entry>)_Entries;
             var initialBucketIndex = unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
             var bucketIndex = initialBucketIndex;
             var elementIndex = bucketIndex * BucketSizeI;
@@ -490,26 +486,25 @@ namespace SimdDictionary {
 
             do {
                 byte bucketCount = bucket.GetSlot(CountSlot);
-                int startIndex = FindSuffixInBucket(bucket, searchVector),
-                    index;
+                int startIndex = FindSuffixInBucket(bucket, searchVector);
 
-                if (typeof(K).IsValueType && (comparer == null))
-                    index = FindKeyInVTBucket(bucketCount, keys, elementIndex, startIndex, key);
-                else
-                    index = FindKeyInBucket(bucketCount, keys, elementIndex, startIndex, comparer, key);
+                ref var entry = ref 
+                    (typeof(K).IsValueType && (comparer == null))
+                        ? ref FindKeyInVTBucket(bucketCount, entries, elementIndex, startIndex, key)
+                        : ref FindKeyInBucket(bucketCount, entries, elementIndex, startIndex, comparer, key);
 
-                if (index >= 0) {
+                if (!Unsafe.IsNullRef(ref entry)) {
                     unchecked {
+                        // FIXME: Why isn't there an Unsafe.Offset?
+                        int indexInBucket = (int)(Unsafe.ByteOffset(ref entries[0], ref entry) / sizeof(Entry)) - elementIndex;
                         int replacementIndexInBucket = bucketCount - 1;
                         bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
-                        bucket.SetSlot((uint)index, bucket.GetSlot(replacementIndexInBucket));
+                        bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                         bucket.SetSlot((uint)replacementIndexInBucket, 0);
-                        ref var replacementKey = ref keys[elementIndex + replacementIndexInBucket];
-                        ref var replacementValue = ref values[elementIndex + replacementIndexInBucket];
-                        keys[elementIndex + index] = replacementKey;
-                        values[elementIndex + index] = replacementValue;
-                        replacementKey = default!;
-                        replacementValue = default!;
+                        ref var replacementEntry = ref entries[elementIndex + replacementIndexInBucket];
+                        entry = replacementEntry;
+                        if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                            replacementEntry = default;
                         _Count--;
                     }
 
@@ -556,12 +551,12 @@ namespace SimdDictionary {
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
-            var index = FindKey(key);
-            if (index < 0) {
+            ref var entry = ref FindKey(key);
+            if (Unsafe.IsNullRef(ref entry)) {
                 value = default!;
                 return false;
             } else {
-                value = _Values[index];
+                value = entry.Value;
                 return true;
             }
         }

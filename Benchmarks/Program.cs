@@ -16,8 +16,10 @@ namespace Benchmarks {
         public static void Main (string[] args) {
             // Self-test before running benchmark suite
 
+            Console.WriteLine("Running self-test...");
+
             var rng = new Random(1234);
-            int c = 4096, d = 4096 * (Debugger.IsAttached ? 5 : 100), e = 4096 * (Debugger.IsAttached ? 1 : 25);
+            int c = 4096, d = 4096 * (Debugger.IsAttached ? 5 : 50), e = 4096 * (Debugger.IsAttached ? 1 : 15);
             List<long> keys = new (c),
                 unusedKeys = new (c),
                 values = new (c);

@@ -130,27 +130,27 @@ namespace SimdDictionary {
             private int _bucketIndex, _valueIndex, _valueIndexLocal;
             private Bucket _currentBucket;
             private Bucket[] _buckets;
-            private K[] _keys;
-            private V[] _values;
+            private Entry[] _entries;
 
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    return _keys[_valueIndex];
+                    return _entries[_valueIndex].Key;
                 }
             }
 
             public V CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    return _values[_valueIndex];
+                    return _entries[_valueIndex].Value;
                 }
             }
 
             public KeyValuePair<K, V> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    return new KeyValuePair<K, V>(_keys[_valueIndex], _values[_valueIndex]);
+                    ref var entry = ref _entries[_valueIndex];
+                    return new KeyValuePair<K, V>(entry.Key, entry.Value);
                 }
             }
             object IEnumerator.Current => Current;
@@ -160,8 +160,7 @@ namespace SimdDictionary {
                 _valueIndex = -1;
                 _valueIndexLocal = BucketSizeI;
                 _buckets = dictionary._Buckets;
-                _values = dictionary._Values;
-                _keys = dictionary._Keys;
+                _entries = dictionary._Entries;
             }
 
             public void Dispose () {
