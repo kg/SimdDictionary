@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
-using TKey = System.String;
+using TKey = System.Int64;
 using TValue = System.Int64;
 
 namespace Benchmarks {
@@ -25,7 +25,12 @@ namespace Benchmarks {
             Unsafe.SkipInit(out Values);
         }
 
-        private unsafe TKey NextKey (Random rng) {
+        private unsafe TKey NextKey (Random rng) =>
+            rng.NextInt64();
+
+        // Right now it's impossible to compete with SCG because its optimized string comparer is private.
+        // As a result there's no point in doing comparison measurements with string keys.
+        /*
             Span<char> chars = stackalloc char[12];
             int c = rng.Next(2, chars.Length);
             for (int i = 0; i < c; i++)
@@ -36,6 +41,7 @@ namespace Benchmarks {
             result.GetHashCode();
             return result;
         }
+        */
 
         private unsafe TValue NextValue (Random rng) =>
             rng.NextInt64();

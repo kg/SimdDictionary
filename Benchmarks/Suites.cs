@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using SimdDictionary;
-using TKey = System.String;
+using TKey = System.Int64;
 using TValue = System.Int64;
 
 namespace Benchmarks {
