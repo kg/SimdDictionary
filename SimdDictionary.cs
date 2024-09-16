@@ -85,6 +85,7 @@ namespace SimdDictionary {
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
         private int _Count, _GrowAtCount;
+        // FIXME: Default-initialize to empty arrays so we can make them non-nullable and remove all the null checks?
         private Bucket[]? _Buckets;
         private Entry[]? _Entries;
 
@@ -156,15 +157,24 @@ namespace SimdDictionary {
 #endif
             }
 
-            var oldCount = _Count;
             var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
             var oldEntries = _Entries;
             checked {
                 _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
-            _Buckets = new Bucket[bucketCount];
-            _Entries = new Entry[actualCapacity];
+
+            // Allocate both new arrays before updating the fields so that we don't get corrupted
+            //  when running out of memory
+            var newEntries = new Entry[actualCapacity];
+            var newBuckets = new Bucket[bucketCount];
+            Thread.MemoryBarrier();
+            // Ensure that when growing we store the new bigger entries array before storing the new
+            //  bigger buckets array, so that other threads will never observe an entries array that
+            //  is too small.
+            _Entries = newEntries;
+            Thread.MemoryBarrier();
+            _Buckets = newBuckets;
             // FIXME: In-place rehashing
             if ((oldBuckets != null) && (oldBuckets.Length > 0) && (oldEntries != null))
                 if (!TryRehash(oldBuckets, oldEntries))
@@ -305,6 +315,8 @@ namespace SimdDictionary {
             var suffix = GetHashSuffix(hashCode);
             Debug.Assert(_Buckets != null);
             var buckets = (Span<Bucket>)_Buckets;
+            // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
+            //  entries array that is too big for the buckets array we've captured above. This is ensured by a barrier in Resize
             var entries = (Span<Entry>)_Entries;
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
             // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
@@ -453,8 +465,7 @@ namespace SimdDictionary {
                 else
                     return result;
             }
-            // FIXME: In-place modification
-            set => Add(key, value);
+            set => TryInsert(key, value, InsertMode.OverwriteValue);
         }
 
         ICollection<K> IDictionary<K, V>.Keys => Keys;
