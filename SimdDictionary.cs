@@ -85,9 +85,14 @@ namespace SimdDictionary {
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
         private int _Count, _GrowAtCount;
-        // FIXME: Default-initialize to empty arrays so we can make them non-nullable and remove all the null checks?
-        private Bucket[]? _Buckets;
-        private Entry[]? _Entries;
+
+#pragma warning disable CA1825
+        private static readonly Bucket[] EmptyBuckets = [];
+        private static readonly Entry[] EmptyEntries = [];
+#pragma warning restore CA1825
+
+        private Bucket[] _Buckets = EmptyBuckets;
+        private Entry[] _Entries = EmptyEntries;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -129,10 +134,10 @@ namespace SimdDictionary {
             else if (capacity == 0)
                 return;
 
-            if ((_Buckets != null) && (Capacity >= capacity))
+            if (Capacity >= capacity)
                 return;
 
-            int nextIncrement = (_Buckets == null)
+            int nextIncrement = (_Buckets.Length == 0)
                 ? capacity
                 : Capacity * 2;
 
@@ -176,7 +181,7 @@ namespace SimdDictionary {
             Thread.MemoryBarrier();
             _Buckets = newBuckets;
             // FIXME: In-place rehashing
-            if ((oldBuckets != null) && (oldBuckets.Length > 0) && (oldEntries != null))
+            if ((oldBuckets.Length > 0) && (oldEntries.Length > 0) && (_Count > 0))
                 if (!TryRehash(oldBuckets, oldEntries))
                     Environment.FailFast("Failed to rehash dictionary for resize operation");
         }
@@ -270,7 +275,7 @@ namespace SimdDictionary {
                 // Comparing entry directly against lastEntry produces smaller code than doing
                 //  indexInBucket++ <= count in the loop
                 ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
-                    lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
+                    lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count - 1);
                 do {
                     if (EqualityComparer<K>.Default.Equals(needle, entry.Key))
                         return ref entry;
@@ -300,7 +305,7 @@ namespace SimdDictionary {
             // Comparing entry directly against lastEntry produces smaller code than doing
             //  indexInBucket++ <= count in the loop
             ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
-                lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
+                lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count - 1);
             do {
                 // FIXME: SCG.Dictionary does a hashcode comparison first, but we don't store the hashcode in the entry.
                 // For expensive comparers, it might be necessary to do this. But the suffix encodes 8 bits of the hash, and
@@ -328,7 +333,6 @@ namespace SimdDictionary {
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
             //  entries array that is too big for the buckets array we've captured above. This is ensured by a barrier in Resize
             var entries = (Span<Entry>)_Entries;
-            Debug.Assert(_Buckets != null);
             // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
             //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
@@ -399,7 +403,7 @@ namespace SimdDictionary {
         // Public for disasmo
         public InsertResult TryInsert (K key, V value, InsertMode mode) {
             // FIXME: Load factor
-            if ((_Entries == null) || (_Count >= _GrowAtCount))
+            if (_Count >= _GrowAtCount)
                 return InsertResult.NeedToGrow;
 
             var comparer = Comparer;
@@ -450,7 +454,7 @@ namespace SimdDictionary {
                         if (bucketIndex < 0)
                             bucketIndex = buckets.Length - 1;
                         bucket = ref buckets[bucketIndex];
-                        var cascadeCount = bucket[CascadeSlot];
+                        var cascadeCount = bucket.GetSlot(CascadeSlot);
                         if (cascadeCount < 255)
                             bucket.SetSlot(CascadeSlot, (byte)(cascadeCount + 1));
                     }
@@ -518,9 +522,8 @@ namespace SimdDictionary {
 
         public void Clear () {
             _Count = 0;
-            if (_Buckets != null)
-                Array.Clear(_Buckets);
-            if ((_Entries != null) && RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+            Array.Clear(_Buckets);
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                 Array.Clear(_Entries);
         }
 
@@ -585,12 +588,18 @@ namespace SimdDictionary {
 #pragma warning restore CS8500
                         int replacementIndexInBucket = bucketCount - 1;
                         bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
-                        bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
-                        bucket.SetSlot((uint)replacementIndexInBucket, 0);
-                        ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
-                        entry = replacementEntry;
-                        if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                            replacementEntry = default;
+                        if (indexInBucket != replacementIndexInBucket) {
+                            bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
+                            bucket.SetSlot((uint)replacementIndexInBucket, 0);
+                            ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
+                            entry = replacementEntry;
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                                replacementEntry = default;
+                        } else {
+                            bucket.SetSlot((uint)indexInBucket, 0);
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                                entry = default;
+                        }
                         _Count--;
                     }
 
@@ -602,7 +611,7 @@ namespace SimdDictionary {
                             bucketIndex = buckets.Length - 1;
                         bucket = ref buckets[bucketIndex];
 
-                        var cascadeCount = bucket[CascadeSlot];
+                        var cascadeCount = bucket.GetSlot(CascadeSlot);
                         if (cascadeCount == 0)
                             Environment.FailFast("Corrupted dictionary bucket cascade slot");
                         // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
@@ -614,7 +623,7 @@ namespace SimdDictionary {
                     return true;
                 }
 
-                if (bucket[CascadeSlot] == 0)
+                if (bucket.GetSlot(CascadeSlot) == 0)
                     return false;
 
                 bucketIndex++;

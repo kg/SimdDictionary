@@ -30,7 +30,11 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class BCLCollisions : Collisions<Dictionary<Collider, Collider>> {
+    public class BCLCollisions : Collisions<Dictionary<Collider, Collider>, Collider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class BCLSemiCollisions : Collisions<Dictionary<SemiCollider, SemiCollider>, SemiCollider> {
     }
 
     [MemoryDiagnoser()]
@@ -61,7 +65,11 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class SimdCollisions : Collisions<SimdDictionary<Collider, Collider>> {
+    public class SimdCollisions : Collisions<SimdDictionary<Collider, Collider>, Collider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdSemiCollisions : Collisions<SimdDictionary<SemiCollider, SemiCollider>, SemiCollider> {
     }
 
     [MemoryDiagnoser()]

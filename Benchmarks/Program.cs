@@ -10,12 +10,14 @@ using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using System.Diagnostics;
 using SimdDictionary;
-using TKey = System.String;
+using TKey = System.Int64;
 using TValue = System.Int64;
 
 namespace Benchmarks {
     public class Program {
         private unsafe static TKey NextKey (Random rng) {
+            return rng.NextInt64();
+            /*
             Span<char> chars = stackalloc char[12];
             int c = rng.Next(2, chars.Length);
             for (int i = 0; i < c; i++)
@@ -25,6 +27,7 @@ namespace Benchmarks {
             // Pre-compute hash
             result.GetHashCode();
             return result;
+            */
         }
 
         private unsafe static TValue NextValue (Random rng) =>
@@ -36,9 +39,9 @@ namespace Benchmarks {
             Console.WriteLine("Running self-test...");
 
             var rng = new Random(1234);
-            int c = 4096, 
-                d = 4096 * (Debugger.IsAttached ? 5 : 20), 
-                e = 4096 * (Debugger.IsAttached ? 1 : 5);
+            int c = 16 * 1024, 
+                d = 4096 * (Debugger.IsAttached ? 1 : 5), 
+                e = 1024 * (Debugger.IsAttached ? 1 : 5);
             List<TKey> keys = new(c),
                 unusedKeys = new(c);
             List<TValue> values = new (c);
@@ -55,7 +58,7 @@ namespace Benchmarks {
 
             for (int i = 0; i < c; i++) {
                 var unusedKey = NextKey(rng);
-                while (keys.Contains(unusedKey))
+                while (keys.Contains(unusedKey) || unusedKeys.Contains(unusedKey))
                     unusedKey = NextKey(rng);
                 unusedKeys.Add(unusedKey);
             }
@@ -64,8 +67,8 @@ namespace Benchmarks {
                 test.Add(keys[i], values[i]);
 
             // Integrity check
-            var expectedKeySet = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-            var enumeratedKeySet = test.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            var expectedKeySet = keys.OrderBy(k => k).ToList();
+            var enumeratedKeySet = test.Keys.OrderBy(k => k).ToList();
             if (!expectedKeySet.SequenceEqual(enumeratedKeySet)) {
                 var missing = new HashSet<TKey>(expectedKeySet);
                 missing.ExceptWith(enumeratedKeySet);
@@ -80,9 +83,9 @@ namespace Benchmarks {
             var keyList = test.Keys.ToArray();
             var valueList = test.Values.ToArray();
 
+            var copy = new SimdDictionary<TKey, TValue>(test);
             for (int j = 0; j < e; j++)
             {
-                var copy = new SimdDictionary<TKey, TValue>(test);
                 for (int i = 0; i < c; i++)
                     if (!copy.TryGetValue(keys[i], out _))
                         throw new Exception();
@@ -100,6 +103,16 @@ namespace Benchmarks {
                         throw new Exception();
 
                 if (copy.Count != 0)
+                    throw new Exception();
+
+                for (int i = 0; i < c; i++)
+                    copy.Add(keys[i], values[i]);
+
+                for (int i = 0; i < c; i++)
+                    if (!copy.TryGetValue(keys[i], out _))
+                        throw new Exception();
+
+                if (copy.Count != c)
                     throw new Exception();
             }
 

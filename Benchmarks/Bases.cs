@@ -145,6 +145,9 @@ namespace Benchmarks {
                     throw new Exception($"Key {Keys[i]} not removed");
             }
 
+            if (Dict.Count != 0)
+                throw new Exception("Dict not empty");
+
             for (int i = 0; i < Size; i++)
                 Dict.Add(Keys[i], Values[i]);
 
@@ -221,12 +224,19 @@ namespace Benchmarks {
         public override string ToString () => $"Collider {base.GetHashCode()}";
     }
 
-    public abstract class Collisions<T>
-        where T : IDictionary<Collider, Collider> {
+    public class SemiCollider {
+        public override int GetHashCode () => base.GetHashCode() & 255;
+        public override bool Equals (object? obj) => object.ReferenceEquals(this, obj);
+        public override string ToString () => $"SemiCollider {base.GetHashCode()}";
+    }
+
+    public abstract class Collisions<T, K>
+        where T : IDictionary<K, K>
+        where K : new () {
 
         public int Size = 1024;
         public T Dict;
-        public List<Collider> Keys, UnusedKeys;
+        public List<K> Keys, UnusedKeys;
 
         public Collisions () {
             // Setup will initialize it.
@@ -243,14 +253,14 @@ namespace Benchmarks {
             // HACK: Don't benchmark growth, since we don't have load factor management yet
             // We initialize with Size items and then add Size more during insertion benchmark
             Dict = (T)ctor.Invoke(new object[] { Size });
-            Keys = new List<Collider>(Size);
-            UnusedKeys = new List<Collider>(Size);
+            Keys = new (Size);
+            UnusedKeys = new (Size);
 
             for (int i = 0; i < Size; i++)
-                Keys.Add(new Collider());
+                Keys.Add(new K());
 
             for (int i = 0; i < Size; i++)
-                UnusedKeys.Add(new Collider());
+                UnusedKeys.Add(new K());
         }
 
         [Benchmark]

@@ -129,14 +129,12 @@ namespace SimdDictionary {
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
             private int _bucketIndex, _valueIndex, _valueIndexLocal;
             private Bucket _currentBucket;
-            private Bucket[]? _buckets;
-            private Entry[]? _entries;
+            private Bucket[] _buckets;
+            private Entry[] _entries;
 
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    if (_entries == null)
-                        throw new InvalidOperationException();
                     return _entries[_valueIndex].Key;
                 }
             }
@@ -144,8 +142,6 @@ namespace SimdDictionary {
             public V CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    if (_entries == null)
-                        throw new InvalidOperationException();
                     return _entries[_valueIndex].Value;
                 }
             }
@@ -153,8 +149,6 @@ namespace SimdDictionary {
             public KeyValuePair<K, V> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    if (_entries == null)
-                        throw new InvalidOperationException();
                     ref var entry = ref _entries[_valueIndex];
                     return new KeyValuePair<K, V>(entry.Key, entry.Value);
                 }
@@ -174,9 +168,6 @@ namespace SimdDictionary {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool MoveNext () {
-                if (_buckets == null)
-                    return false;
-
                 _valueIndex++;
                 _valueIndexLocal++;
 
@@ -190,6 +181,7 @@ namespace SimdDictionary {
                     }
 
                     // We iterate over the whole bucket including empty slots to keep the indices in sync
+                    // FIXME: It would be faster to only iterate occupied slots and then skip based on count
                     while (_valueIndexLocal < BucketSizeI) {
                         var suffix = _currentBucket.GetSlot(_valueIndexLocal);
                         if (suffix != 0)
