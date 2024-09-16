@@ -224,10 +224,16 @@ namespace Benchmarks {
         public override string ToString () => $"Collider {base.GetHashCode()}";
     }
 
-    public class SemiCollider {
-        public override int GetHashCode () => base.GetHashCode() & 255;
+    public class TailCollider {
+        public override int GetHashCode () => base.GetHashCode() & 0xFF;
         public override bool Equals (object? obj) => object.ReferenceEquals(this, obj);
-        public override string ToString () => $"SemiCollider {base.GetHashCode()}";
+        public override string ToString () => $"TailCollider {base.GetHashCode()}";
+    }
+
+    public class HeadCollider {
+        public override int GetHashCode () => base.GetHashCode() & unchecked((int)0xFF000000u);
+        public override bool Equals (object? obj) => object.ReferenceEquals(this, obj);
+        public override string ToString () => $"HeadCollider {base.GetHashCode()}";
     }
 
     public abstract class Collisions<T, K>

@@ -34,7 +34,11 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class BCLSemiCollisions : Collisions<Dictionary<SemiCollider, SemiCollider>, SemiCollider> {
+    public class BCLTailCollisions : Collisions<Dictionary<TailCollider, TailCollider>, TailCollider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class BCLHeadCollisions : Collisions<Dictionary<HeadCollider, HeadCollider>, HeadCollider> {
     }
 
     [MemoryDiagnoser()]
@@ -69,7 +73,11 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class SimdSemiCollisions : Collisions<SimdDictionary<SemiCollider, SemiCollider>, SemiCollider> {
+    public class SimdTailCollisions : Collisions<SimdDictionary<TailCollider, TailCollider>, TailCollider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdHeadCollisions : Collisions<SimdDictionary<HeadCollider, HeadCollider>, HeadCollider> {
     }
 
     [MemoryDiagnoser()]

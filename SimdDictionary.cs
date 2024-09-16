@@ -1,5 +1,6 @@
-﻿// This is considerably slower than power-of-two bucket counts.
-// #define PRIME_BUCKET_COUNTS
+﻿// This is considerably slower than power-of-two bucket counts, but it provides
+//  much better collision resistance than power-of-two bucket counts do
+#define PRIME_BUCKET_COUNTS
 
 using System;
 using System.Buffers;
