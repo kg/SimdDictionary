@@ -43,23 +43,20 @@ namespace SimdDictionary {
             EnsureUnique,
             // Overwrite the value if a matching key is found
             OverwriteValue,
-            // Don't scan for existing matches before inserting into the bucket
+            // Don't scan for existing matches before inserting into the bucket. This is only
+            //  safe to do when copying an existing dictionary or rehashing an existing dictionary
             Rehashing
         }
 
         public enum InsertResult {
+            // The specified key did not exist in the dictionary, and a key/value pair was inserted
             OkAddedNew,
+            // The specified key was found in the dictionary and we overwrote the value
             OkOverwroteExisting,
+            // The dictionary is full and needs to be grown before you can perform an insert
             NeedToGrow,
+            // The specified key already exists in the dictionary, so nothing was done
             KeyAlreadyPresent,
-        }
-
-        // Special result indexes when the key is not found in the bucket
-        internal enum ScanBucketResult : int {
-            // One or more items cascaded out of the bucket so we need to keep scanning
-            Overflowed = 33,
-            // Nothing cascaded out of the bucket so we can stop scanning
-            NoOverflow = 34,
         }
 
         public const int InitialCapacity = 0,
@@ -196,10 +193,16 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static byte GetHashSuffix (uint hashCode) =>
+        internal static byte GetHashSuffix (uint hashCode) {
             // The bottom bits of the hash form the bucket index, so we
             //  use the top bits of the hash as a suffix
-            unchecked((byte)((hashCode >> 24) | SuffixSalt));
+            // var result = unchecked((byte)((hashCode >> 24) | SuffixSalt));
+            var result = unchecked((byte)(hashCode >> 24));
+            // Assuming the JIT turns this into a cmov, this should be better on average
+            //  since it nearly doubles the number of possible suffixes, improving collision
+            //  resistance and reducing the odds of having to check multiple keys.
+            return result == 0 ? (byte)255 : result;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
@@ -371,6 +374,8 @@ namespace SimdDictionary {
                             entry.Value = value;
                             return InsertResult.OkOverwroteExisting;
                         }
+                    } else if (startIndex < BucketSizeI) {
+                        // FIXME: Suffix collision. Track these for string rehashing anti-DoS mitigation!
                     }
                 }
 
@@ -385,6 +390,7 @@ namespace SimdDictionary {
                     // We may have cascaded out of a previous bucket; if so, scan backwards and update
                     //  the cascade count for every bucket we previously scanned.
                     while (bucketIndex != initialBucketIndex) {
+                        // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
                         bucketIndex--;
                         if (bucketIndex < 0)
                             bucketIndex = buckets.Length - 1;
