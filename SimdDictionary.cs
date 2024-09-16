@@ -18,16 +18,15 @@ using System.Runtime.Intrinsics.X86;
 using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
 
 namespace SimdDictionary {
-
     internal unsafe static class BucketExtensions {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte GetSlot (this ref readonly Bucket self, int index) {
             Debug.Assert(index < 16);
-            // index &= 15;
-            return Unsafe.AddByteOffset(ref Unsafe.As<Bucket, byte>(ref Unsafe.AsRef(in self)), index);
             // the extract-lane opcode this generates is slower than doing a byte load from memory,
             //  even if we already have the bucket in a register. not sure why.
-            // self[index];
+            // return self[index];
+            // index &= 15;
+            return Unsafe.AddByteOffset(ref Unsafe.As<Bucket, byte>(ref Unsafe.AsRef(in self)), index);
         }
 
         // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
