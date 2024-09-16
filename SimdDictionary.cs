@@ -1,8 +1,12 @@
-﻿using System;
+﻿// This is considerably slower than power-of-two bucket counts.
+// #define PRIME_BUCKET_COUNTS
+
+using System;
 using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.Net.Sockets;
 using System.Numerics;
 using System.Reflection;
@@ -74,6 +78,10 @@ namespace SimdDictionary {
             SuffixSalt = 0b10000000,
             BucketSizeU = 14;
 
+#if PRIME_BUCKET_COUNTS
+        private ulong _fastModMultiplier;
+#endif
+
         public readonly KeyCollection Keys;
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
@@ -114,15 +122,6 @@ namespace SimdDictionary {
                     Environment.FailFast("Failed to insert key/value pair while copying dictionary");
         }
 
-        static int AdjustCapacity (int capacity) {
-            if (capacity < 1)
-                capacity = 1;
-            var bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
-            // Power-of-two bucket counts enable using & (count - 1) instead of mod count
-            var npot = BitOperations.RoundUpToPowerOf2((uint)bucketCount);
-            return (int)(npot * BucketSizeI);
-        }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
             if (capacity < 0)
@@ -141,12 +140,24 @@ namespace SimdDictionary {
         }
 
         internal void Resize (int capacity) {
+            int bucketCount;
             checked {
-                capacity = AdjustCapacity((int)((long)capacity * OversizePercentage / 100));
+                capacity = (int)((long)capacity * OversizePercentage / 100);
+                if (capacity < 1)
+                    capacity = 1;
+
+                bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
+
+#if PRIME_BUCKET_COUNTS
+                bucketCount = HashHelpers.GetPrime(capacity);
+                _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
+#else
+                // Power-of-two bucket counts enable using & (count - 1) instead of mod count
+                bucketCount = (int)BitOperations.RoundUpToPowerOf2((uint)bucketCount);
+#endif
             }
 
             var oldCount = _Count;
-            var bucketCount = (capacity + BucketSizeI - 1) / BucketSizeI;
             var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
             var oldEntries = _Entries;
@@ -207,8 +218,12 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
-            unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+        internal int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
+#if PRIME_BUCKET_COUNTS
+        unchecked((int)HashHelpers.FastMod(hashCode, (uint)buckets.Length, _fastModMultiplier));
+#else
+        unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+#endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
