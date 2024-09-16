@@ -10,31 +10,46 @@ using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using System.Diagnostics;
 using SimdDictionary;
+using TKey = System.String;
+using TValue = System.Int64;
 
 namespace Benchmarks {
     public class Program {
+        private unsafe static TKey NextKey (Random rng) {
+            Span<char> chars = stackalloc char[12];
+            int c = rng.Next(1, chars.Length);
+            for (int i = 0; i < c; i++)
+                chars[i] = (char)(rng.Next() % 255);
+            return new String(chars.Slice(0, c));
+        }
+
+        private unsafe static TValue NextValue (Random rng) =>
+            rng.NextInt64();
+        
         public static void Main (string[] args) {
             // Self-test before running benchmark suite
 
             Console.WriteLine("Running self-test...");
 
             var rng = new Random(1234);
-            int c = 4096, d = 4096 * (Debugger.IsAttached ? 5 : 50), e = 4096 * (Debugger.IsAttached ? 1 : 15);
-            List<long> keys = new (c),
-                unusedKeys = new (c),
-                values = new (c);
+            int c = 4096, 
+                d = 4096 * (Debugger.IsAttached ? 5 : 25), 
+                e = 4096 * (Debugger.IsAttached ? 1 : 5);
+            List<TKey> keys = new(c),
+                unusedKeys = new(c);
+            List<TValue> values = new (c);
             // Don't pre-allocate capacity, so that we check growth/rehashing
-            var test = new SimdDictionary<long, long>(0);
+            var test = new SimdDictionary<TKey, TValue>(0);
 
             for (int i = 0; i < c; i++) {
-                keys.Add(rng.NextInt64());
+                keys.Add(NextKey(rng));
                 values.Add(i * 2 + 1);
             }
 
             for (int i = 0; i < c; i++) {
-                var unusedKey = rng.NextInt64();
+                var unusedKey = NextKey(rng);
                 while (keys.Contains(unusedKey))
-                    unusedKey = rng.NextInt64();
+                    unusedKey = NextKey(rng);
                 unusedKeys.Add(unusedKey);
             }
 
@@ -45,7 +60,7 @@ namespace Benchmarks {
             var expectedKeySet = keys.OrderBy(k => k).ToList();
             var enumeratedKeySet = test.Keys.OrderBy(k => k).ToList();
             if (!expectedKeySet.SequenceEqual(enumeratedKeySet)) {
-                var missing = new HashSet<long>(keys);
+                var missing = new HashSet<TKey>(keys);
                 missing.ExceptWith(enumeratedKeySet);
                 throw new KeyNotFoundException();
             }
@@ -60,7 +75,7 @@ namespace Benchmarks {
 
             for (int j = 0; j < e; j++)
             {
-                var copy = new SimdDictionary<long, long>(test);
+                var copy = new SimdDictionary<TKey, TValue>(test);
                 for (int i = 0; i < c; i++)
                     if (!copy.TryGetValue(keys[i], out _))
                         throw new Exception();

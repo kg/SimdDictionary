@@ -4,7 +4,7 @@ using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using TKey = System.String;
-using TValue = System.String;
+using TValue = System.Int64;
 
 namespace Benchmarks {
     public abstract class DictSuiteBase<T>
@@ -26,18 +26,15 @@ namespace Benchmarks {
         }
 
         private unsafe TKey NextKey (Random rng) {
-            Span<char> chars = stackalloc char[8];
-            for (int i = 0; i < chars.Length; i++)
+            Span<char> chars = stackalloc char[12];
+            int c = rng.Next(1, chars.Length);
+            for (int i = 0; i < c; i++)
                 chars[i] = (char)(rng.Next() % 255);
-            return new String(chars);
+            return new String(chars.Slice(0, c));
         }
 
-        private unsafe TValue NextValue (Random rng) {
-            Span<char> chars = stackalloc char[2];
-            for (int i = 0; i < chars.Length; i++)
-                chars[i] = (char)(rng.Next() % 255);
-            return new String(chars);
-        }
+        private unsafe TValue NextValue (Random rng) =>
+            rng.NextInt64();
 
         [GlobalSetup]
         public virtual void Setup () {

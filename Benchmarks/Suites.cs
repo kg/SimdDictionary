@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using SimdDictionary;
 using TKey = System.String;
-using TValue = System.String;
+using TValue = System.Int64;
 
 namespace Benchmarks {
     [MemoryDiagnoser()]
