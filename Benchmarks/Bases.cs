@@ -1,9 +1,10 @@
 ﻿using System;
 using System.Runtime.CompilerServices;
+using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
-using TKey = System.Int64;
-using TValue = System.Int64;
+using TKey = System.String;
+using TValue = System.String;
 
 namespace Benchmarks {
     public abstract class DictSuiteBase<T>
@@ -22,6 +23,20 @@ namespace Benchmarks {
             Unsafe.SkipInit(out Keys);
             Unsafe.SkipInit(out UnusedKeys);
             Unsafe.SkipInit(out Values);
+        }
+
+        private unsafe TKey NextKey (Random rng) {
+            Span<char> chars = stackalloc char[8];
+            for (int i = 0; i < chars.Length; i++)
+                chars[i] = (char)(rng.Next() % 255);
+            return new String(chars);
+        }
+
+        private unsafe TValue NextValue (Random rng) {
+            Span<char> chars = stackalloc char[2];
+            for (int i = 0; i < chars.Length; i++)
+                chars[i] = (char)(rng.Next() % 255);
+            return new String(chars);
         }
 
         [GlobalSetup]
@@ -44,9 +59,9 @@ namespace Benchmarks {
             var existingKeys = new HashSet<TKey>();
             var rng = new Random(1234);
             for (int i = 0; i < Size; i++) {
-                var v = rng.NextInt64();
+                var v = NextValue(rng);
                 while (true) {
-                    var k = rng.NextInt64();
+                    var k = NextKey(rng);
                     if (!existingKeys.Contains(k)) {
                         existingKeys.Add(k);
                         Keys.Add(k);
@@ -60,7 +75,7 @@ namespace Benchmarks {
 
             for (int i = 0; i < Size; i++) {
                 while (true) {
-                    int k = rng.Next();
+                    var k = NextKey(rng);
                     if (!existingKeys.Contains(k)) {
                         existingKeys.Add(k);
                         UnusedKeys.Add(k);

@@ -36,8 +36,6 @@ namespace SimdDictionary {
             EnsureUnique,
             // Overwrite the value if a matching key is found
             OverwriteValue,
-            // Overwrite both the key and value if a matching key is found
-            OverwriteKeyAndValue,
             // Don't scan for existing matches before inserting into the bucket
             Rehashing
         }
@@ -94,7 +92,10 @@ namespace SimdDictionary {
         public SimdDictionary (int capacity, IEqualityComparer<K>? comparer) {
             Unsafe.SkipInit(out _Buckets);
             Unsafe.SkipInit(out _Entries);
-            if (typeof(K).IsValueType)
+
+            if ((typeof(K) == typeof(string)) && (comparer == EqualityComparer<string>.Default))
+                Comparer = null;
+            else if (typeof(K).IsValueType || (typeof(K) == typeof(string)))
                 Comparer = comparer;
             else
                 Comparer = comparer ?? EqualityComparer<K>.Default;            
@@ -214,10 +215,10 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ref Entry FindKeyInVTBucket (byte count, Span<Entry> entries, int elementIndex, int indexInBucket, K needle) {
+        internal static ref Entry FindKeyInBucketWithDefaultComparer (byte count, Span<Entry> entries, int elementIndex, int indexInBucket, K needle) {
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
-            if (typeof(K).IsValueType) {
+            if (typeof(K).IsValueType || typeof (K) == typeof(string)) {
                 // We do this instead of a for-loop so we can skip ReadKey when there's no match,
                 //  which improves performance for missing items and/or hash collisions
                 if (indexInBucket >= count)
@@ -271,12 +272,12 @@ namespace SimdDictionary {
 
             // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
             //  to keep ryujit happy
-            if (typeof(K).IsValueType && (comparer == null)) {
+            if ((typeof(K).IsValueType || typeof(K) == typeof(string)) && (comparer == null)) {
                 // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
                 do {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    ref var entry = ref FindKeyInVTBucket(bucket.GetSlot(CountSlot), entries, elementIndex, startIndex, key);
+                    ref var entry = ref FindKeyInBucketWithDefaultComparer(bucket.GetSlot(CountSlot), entries, elementIndex, startIndex, key);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
                             return ref Unsafe.NullRef<Entry>();
@@ -340,16 +341,14 @@ namespace SimdDictionary {
                 byte bucketCount = bucket.GetSlot(CountSlot);
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(bucket, searchVector), index;
-                    ref Entry entry = ref (typeof(K).IsValueType && (comparer == null))
-                            ? ref FindKeyInVTBucket(bucketCount, entries, elementIndex, startIndex, key)
+                    ref Entry entry = ref ((typeof(K).IsValueType || typeof(K) == typeof(string)) && (comparer == null))
+                            ? ref FindKeyInBucketWithDefaultComparer(bucketCount, entries, elementIndex, startIndex, key)
                             : ref FindKeyInBucket(bucketCount, entries, elementIndex, startIndex, comparer!, key);
 
                     if (!Unsafe.IsNullRef(ref entry)) {
                         if (mode == InsertMode.EnsureUnique)
                             return InsertResult.KeyAlreadyPresent;
                         else {
-                            if (mode == InsertMode.OverwriteKeyAndValue)
-                                entry.Key = key;
                             entry.Value = value;
                             return InsertResult.OkOverwroteExisting;
                         }
@@ -489,8 +488,8 @@ namespace SimdDictionary {
                 int startIndex = FindSuffixInBucket(bucket, searchVector);
 
                 ref var entry = ref 
-                    (typeof(K).IsValueType && (comparer == null))
-                        ? ref FindKeyInVTBucket(bucketCount, entries, elementIndex, startIndex, key)
+                    ((typeof(K).IsValueType || typeof(K) == typeof(string)) && (comparer == null))
+                        ? ref FindKeyInBucketWithDefaultComparer(bucketCount, entries, elementIndex, startIndex, key)
                         : ref FindKeyInBucket(bucketCount, entries, elementIndex, startIndex, comparer, key);
 
                 if (!Unsafe.IsNullRef(ref entry)) {

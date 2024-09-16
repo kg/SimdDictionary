@@ -5,8 +5,8 @@ using System.Text;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using SimdDictionary;
-using TKey = System.Int64;
-using TValue = System.Int64;
+using TKey = System.String;
+using TValue = System.String;
 
 namespace Benchmarks {
     [MemoryDiagnoser()]
