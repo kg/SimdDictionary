@@ -14,6 +14,11 @@ namespace Benchmarks {
     }
 
     public class BCLLookup : Lookup<Dictionary<TKey, TValue>> { 
+        protected override bool TryGetValue (long key, out long value) =>
+            Dict.TryGetValue(key, out value);
+
+        protected override bool ContainsKey (long key) =>
+            Dict.ContainsKey(key);
     }
 
     [MemoryDiagnoser()]
@@ -39,7 +44,12 @@ namespace Benchmarks {
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
-    public class SimdLookup : Lookup<SimdDictionary<TKey, TValue>> { 
+    public class SimdLookup : Lookup<SimdDictionary<TKey, TValue>> {
+        protected override bool TryGetValue (long key, out long value) =>
+            Dict.TryGetValue(key, out value);
+
+        protected override bool ContainsKey (long key) =>
+            Dict.ContainsKey(key);
     }
 
     [MemoryDiagnoser()]

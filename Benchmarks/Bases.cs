@@ -110,13 +110,16 @@ namespace Benchmarks {
         }
     }
 
-    public class Lookup<T> : DictSuiteBase<T>
+    public abstract class Lookup<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
+
+        protected abstract bool TryGetValue (TKey key, out TValue value);
+        protected abstract bool ContainsKey (TKey key);
 
         [Benchmark]
         public void FindExisting () {
             for (int i = 0; i < Size; i++) {
-                if (!Dict.TryGetValue(Keys[i], out var value))
+                if (!TryGetValue(Keys[i], out var value))
                     throw new Exception("Key {Keys[i]} not found");
                 if (value != Values[i])
                     throw new Exception("Found value did not match: {value} != {Values[i]}");
@@ -126,7 +129,7 @@ namespace Benchmarks {
         [Benchmark]
         public void FindMissing () {
             for (int i = 0; i < Size; i++) {
-                if (Dict.TryGetValue(UnusedKeys[i], out _))
+                if (ContainsKey(UnusedKeys[i]))
                     throw new Exception("Found missing item");
             }
         }

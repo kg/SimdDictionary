@@ -267,13 +267,17 @@ namespace SimdDictionary {
                 if (indexInBucket >= count)
                     return ref Unsafe.NullRef<Entry>();
 
-                ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
+                // Comparing entry directly against lastEntry produces smaller code than doing
+                //  indexInBucket++ <= count in the loop
+                ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
+                    lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
                 do {
                     if (EqualityComparer<K>.Default.Equals(needle, entry.Key))
                         return ref entry;
-                    indexInBucket++;
+                    if (Unsafe.AreSame(ref entry, ref lastEntry))
+                        break;
                     entry = ref Unsafe.Add(ref entry, 1);
-                } while (indexInBucket < count);
+                } while (true);
             } else {
                 Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
             }
@@ -287,20 +291,26 @@ namespace SimdDictionary {
             Debug.Assert(count <= BucketSizeI);
             Debug.Assert(comparer != null);
 
+            // We do this instead of a for-loop so we can skip ReadKey when there's no match,
+            //  which improves performance for missing items and/or hash collisions
             if (indexInBucket >= count)
                 return ref Unsafe.NullRef<Entry>();
 
             // FIXME: Load comparer field on-demand here to optimize the 'no match' case?
-            ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
+            // Comparing entry directly against lastEntry produces smaller code than doing
+            //  indexInBucket++ <= count in the loop
+            ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
+                lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
             do {
                 // FIXME: SCG.Dictionary does a hashcode comparison first, but we don't store the hashcode in the entry.
                 // For expensive comparers, it might be necessary to do this. But the suffix encodes 8 bits of the hash, and
                 //  the bucket index encodes another few bits as well, so it is less necessary than it is in SCG.Dictionary
                 if (comparer.Equals(needle, entry.Key))
                     return ref entry;
-                indexInBucket++;
+                if (Unsafe.AreSame(ref entry, ref lastEntry))
+                    break;
                 entry = ref Unsafe.Add(ref entry, 1);
-            } while (indexInBucket < count);
+            } while (true);
 
             return ref Unsafe.NullRef<Entry>();
         }
@@ -312,23 +322,25 @@ namespace SimdDictionary {
 
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
-            var suffix = GetHashSuffix(hashCode);
-            Debug.Assert(_Buckets != null);
+            var searchVector = Vector128.Create(GetHashSuffix(hashCode));
+
             var buckets = (Span<Bucket>)_Buckets;
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
             //  entries array that is too big for the buckets array we've captured above. This is ensured by a barrier in Resize
             var entries = (Span<Entry>)_Entries;
-            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+            Debug.Assert(_Buckets != null);
             // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
             //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
-            var searchVector = Vector128.Create(suffix);
+
+            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+
             // FIXME: There are two range checks here for buckets, first initialBucketIndex and then buckets.Length - 1.
             // We know by definition that buckets.Length - 1 can't fail the range check as long as the bucket count is more than 0,
             //  and we always allocate at least one bucket. So we can probably optimize the range check out somehow.
             ref Bucket initialBucket = ref buckets[initialBucketIndex],
-                bucket = ref initialBucket,
-                lastBucket = ref buckets[buckets.Length - 1];
+                lastBucket = ref buckets[buckets.Length - 1],
+                bucket = ref initialBucket;
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
@@ -336,8 +348,11 @@ namespace SimdDictionary {
             if (typeof(K).IsValueType && (comparer == null)) {
                 // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
                 do {
+                    // Calculating startIndex before the GetSlot call reduces code size slightly, and causes the indirect load
+                    //  for the vectorized compare to precede the GetSlot operation, which is probably ideal
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
+                    // Using a cmov to conditionally perform the count GetSlot also isn't faster
                     ref var entry = ref FindKeyInBucketWithDefaultComparer(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, key);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
@@ -358,6 +373,7 @@ namespace SimdDictionary {
                 do {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
+                    // Using a cmov to conditionally perform the count GetSlot also isn't faster
                     ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, comparer!, key);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
