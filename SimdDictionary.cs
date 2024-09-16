@@ -1,6 +1,8 @@
 ﻿// This is considerably slower than power-of-two bucket counts, but it provides
 //  much better collision resistance than power-of-two bucket counts do
 #define PRIME_BUCKET_COUNTS
+// Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
+// #define FORCE_SCALAR_IMPLEMENTATION
 
 using System;
 using System.Buffers;
@@ -240,10 +242,9 @@ namespace SimdDictionary {
         unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
 #endif
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
-            // We create the search vector on the fly with Vector128.Create(suffix) because passing it as a param from outside
-            //  seems to cause RyuJIT to generate inferior code instead of flowing it through a register even when inlined
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        internal static unsafe int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
+#if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
                 return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket)));
             } else if (AdvSimd.Arm64.IsSupported) {
@@ -254,8 +255,16 @@ namespace SimdDictionary {
                     (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
                 return BitOperations.TrailingZeroCount(bits);
             } else {
-                // FIXME: Scalar implementation like dn_simdhash's
-                Environment.FailFast("Scalar search not implemented");
+#else
+            {
+#endif
+                byte needle = searchVector[0];
+                var haystack = (byte*)Unsafe.AsPointer(ref bucket);
+                // FIXME: Hand-unrolling into a chain of cmovs like in dn_simdhash doesn't work.
+                for (int i = 0, c = bucket.GetSlot(CountSlot); i < c; i++) {
+                    if (haystack[i] == needle)
+                        return i;
+                }
                 return 32;
             }
         }
