@@ -17,10 +17,14 @@ namespace Benchmarks {
     public class Program {
         private unsafe static TKey NextKey (Random rng) {
             Span<char> chars = stackalloc char[12];
-            int c = rng.Next(1, chars.Length);
+            int c = rng.Next(2, chars.Length);
             for (int i = 0; i < c; i++)
-                chars[i] = (char)(rng.Next() % 255);
-            return new String(chars.Slice(0, c));
+                chars[i] = (char)rng.Next(32, 127);
+
+            var result = new String(chars.Slice(0, c));
+            // Pre-compute hash
+            result.GetHashCode();
+            return result;
         }
 
         private unsafe static TValue NextValue (Random rng) =>
@@ -33,7 +37,7 @@ namespace Benchmarks {
 
             var rng = new Random(1234);
             int c = 4096, 
-                d = 4096 * (Debugger.IsAttached ? 5 : 25), 
+                d = 4096 * (Debugger.IsAttached ? 5 : 20), 
                 e = 4096 * (Debugger.IsAttached ? 1 : 5);
             List<TKey> keys = new(c),
                 unusedKeys = new(c);
@@ -42,7 +46,10 @@ namespace Benchmarks {
             var test = new SimdDictionary<TKey, TValue>(0);
 
             for (int i = 0; i < c; i++) {
-                keys.Add(NextKey(rng));
+                var key = NextKey(rng);
+                while (keys.Contains(key))
+                    key = NextKey(rng);
+                keys.Add(key);
                 values.Add(i * 2 + 1);
             }
 
@@ -57,10 +64,10 @@ namespace Benchmarks {
                 test.Add(keys[i], values[i]);
 
             // Integrity check
-            var expectedKeySet = keys.OrderBy(k => k).ToList();
-            var enumeratedKeySet = test.Keys.OrderBy(k => k).ToList();
+            var expectedKeySet = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            var enumeratedKeySet = test.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
             if (!expectedKeySet.SequenceEqual(enumeratedKeySet)) {
-                var missing = new HashSet<TKey>(keys);
+                var missing = new HashSet<TKey>(expectedKeySet);
                 missing.ExceptWith(enumeratedKeySet);
                 throw new KeyNotFoundException();
             }

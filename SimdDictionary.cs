@@ -100,10 +100,10 @@ namespace SimdDictionary {
             Unsafe.SkipInit(out _Buckets);
             Unsafe.SkipInit(out _Entries);
 
-            if ((typeof(K) == typeof(string)) && (comparer == EqualityComparer<string>.Default))
-                Comparer = null;
-            else if (typeof(K).IsValueType || (typeof(K) == typeof(string)))
+            if (typeof(K).IsValueType)
                 Comparer = comparer;
+            else if (typeof(K) == typeof(string))
+                Comparer = comparer ?? (IEqualityComparer<K>)StringComparer.Ordinal;
             else
                 Comparer = comparer ?? EqualityComparer<K>.Default;            
             EnsureCapacity(capacity);
@@ -192,7 +192,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
-            if (typeof(K).IsValueType || typeof(K) == typeof(string)) {
+            if (typeof(K).IsValueType) {
                 if (comparer == null)
                     return unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!));
             }
@@ -230,7 +230,7 @@ namespace SimdDictionary {
 
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
-            if (typeof(K).IsValueType || typeof (K) == typeof(string)) {
+            if (typeof(K).IsValueType) {
                 // We do this instead of a for-loop so we can skip ReadKey when there's no match,
                 //  which improves performance for missing items and/or hash collisions
                 if (indexInBucket >= count)
@@ -244,7 +244,7 @@ namespace SimdDictionary {
                     entry = ref Unsafe.Add(ref entry, 1);
                 } while (indexInBucket < count);
             } else {
-                Environment.FailFast("FindKeyInVTBucket called for non-struct key type");
+                Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
             }
 
             return ref Unsafe.NullRef<Entry>();
@@ -287,7 +287,7 @@ namespace SimdDictionary {
 
             // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
             //  to keep ryujit happy
-            if ((typeof(K).IsValueType || typeof(K) == typeof(string)) && (comparer == null)) {
+            if (typeof(K).IsValueType && (comparer == null)) {
                 // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
                 do {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
@@ -359,7 +359,7 @@ namespace SimdDictionary {
                 byte bucketCount = bucket.GetSlot(CountSlot);
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(bucket, searchVector);
-                    ref Entry entry = ref ((typeof(K).IsValueType || typeof(K) == typeof(string)) && (comparer == null))
+                    ref Entry entry = ref (typeof(K).IsValueType && (comparer == null))
                             ? ref FindKeyInBucketWithDefaultComparer(bucketCount, ref firstBucketEntry, startIndex, key)
                             : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer!, key);
 
@@ -508,7 +508,7 @@ namespace SimdDictionary {
                 int startIndex = FindSuffixInBucket(bucket, searchVector);
 
                 ref var entry = ref 
-                    ((typeof(K).IsValueType || typeof(K) == typeof(string)) && (comparer == null))
+                    (typeof(K).IsValueType && (comparer == null))
                         ? ref FindKeyInBucketWithDefaultComparer(bucketCount, ref firstBucketEntry, startIndex, key)
                         : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer, key);
 
