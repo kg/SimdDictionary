@@ -20,6 +20,7 @@ using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Wasm;
 using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
+using System.Runtime.Serialization;
 
 namespace SimdDictionary {
     internal unsafe static class BucketExtensions {
@@ -42,7 +43,11 @@ namespace SimdDictionary {
         }
     }
 
-    public partial class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
+    public partial class SimdDictionary<K, V> : 
+        IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
+        ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
+        where K : notnull
+    {
         internal record struct Entry (K Key, V Value);
 
         public enum InsertMode {
@@ -350,10 +355,6 @@ namespace SimdDictionary {
 
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
-            // FIXME: RyuJIT cannot 'see through' FindSuffixInBucket even though it's inlined, so it ends up assigning
-            //  searchVector to xmm6, which requires the jitcode to preserve xmm6's previous value on entry and restore
-            //  it on exit, wasting valuable memory bandwidth. So we have to construct it on-demand instead. :(
-            // var searchVector = Vector128.Create(suffix);
 
             var buckets = (Span<Bucket>)_Buckets;
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
@@ -368,6 +369,10 @@ namespace SimdDictionary {
             //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the method
             //  calls for the comparer, etc, and the problem is that the vector has to live across method calls so it picks a nvreg.
             var suffix = GetHashSuffix(hashCode);
+            // FIXME: RyuJIT cannot 'see through' FindSuffixInBucket even though it's inlined, so it ends up assigning
+            //  searchVector to xmm6, which requires the jitcode to preserve xmm6's previous value on entry and restore
+            //  it on exit, wasting valuable memory bandwidth. So we have to construct it on-demand instead. :(
+            // var searchVector = Vector128.Create(suffix);
 
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
 
@@ -524,7 +529,18 @@ namespace SimdDictionary {
                 else
                     return result;
             }
-            set => TryInsert(key, value, InsertMode.OverwriteValue);
+            set {
+            retry:
+                var insertResult = TryInsert(key, value, InsertMode.OverwriteValue);
+                switch (insertResult) {
+                    case InsertResult.OkAddedNew:
+                        _Count++;
+                        return;
+                    case InsertResult.NeedToGrow:
+                        Resize(_GrowAtCount * 2);
+                        goto retry;
+                }
+            }
         }
 
         ICollection<K> IDictionary<K, V>.Keys => Keys;
@@ -534,6 +550,27 @@ namespace SimdDictionary {
         public int Capacity => _GrowAtCount;
 
         bool ICollection<KeyValuePair<K, V>>.IsReadOnly => false;
+
+        bool IDictionary.IsFixedSize => false;
+
+        bool IDictionary.IsReadOnly => false;
+
+        ICollection IDictionary.Keys => Keys;
+
+        ICollection IDictionary.Values => Values;
+
+        bool ICollection.IsSynchronized => false;
+
+        object ICollection.SyncRoot => this;
+
+        IEnumerable<K> IReadOnlyDictionary<K, V>.Keys => Keys;
+
+        IEnumerable<V> IReadOnlyDictionary<K, V>.Values => Values;
+
+        object? IDictionary.this[object key] {
+            get => this[(K)key];
+            set => this[(K)key] = (V)value;
+        }
 
         public void Add (K key, V value) {
             var ok = TryAdd(key, value);
@@ -698,5 +735,82 @@ namespace SimdDictionary {
 
         public object Clone () =>
             new SimdDictionary<K, V>(this);
+
+        public void CopyTo (KeyValuePair<K, V>[] array, int index) {
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
+            if ((uint)index > (uint)array.Length)
+                throw new ArgumentOutOfRangeException(nameof(index));
+            if (array.Length - index < Count)
+                throw new ArgumentException("Destination array too small", nameof(index));
+
+            var buckets = (Span<Bucket>)_Buckets;
+            var entries = (Span<Entry>)_Entries;
+            var destination = (Span<KeyValuePair<K, V>>)array;
+            ref var firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+
+            for (int i = 0; i < buckets.Length; i++) {
+                var bucketCount = buckets[i].GetSlot(CountSlot);
+                for (int j = 0; j < bucketCount; j++) {
+                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
+                    array[index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
+                }
+
+                firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
+            }
+        }
+
+        private void CopyTo (object[] array, int index) {
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
+            if ((uint)index > (uint)array.Length)
+                throw new ArgumentOutOfRangeException(nameof(index));
+            if (array.Length - index < Count)
+                throw new ArgumentException("Destination array too small", nameof(index));
+
+            var buckets = (Span<Bucket>)_Buckets;
+            var entries = (Span<Entry>)_Entries;
+            var destination = (Span<object>)array;
+            ref var firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+
+            for (int i = 0; i < buckets.Length; i++) {
+                var bucketCount = buckets[i].GetSlot(CountSlot);
+                for (int j = 0; j < bucketCount; j++) {
+                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
+                    array[index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
+                }
+
+                firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
+            }
+        }
+
+        void IDictionary.Add (object key, object? value) =>
+            Add((K)key, (V)value);
+
+        bool IDictionary.Contains (object key) =>
+            ContainsKey((K)key);
+
+        IDictionaryEnumerator IDictionary.GetEnumerator () =>
+            new Enumerator(this);
+
+        void IDictionary.Remove (object key) =>
+            Remove((K)key);
+
+        void ICollection.CopyTo (Array array, int index) {
+            if (array is KeyValuePair<K, V>[] kvpa)
+                CopyTo(kvpa, 0);
+            else if (array is object[] oa)
+                CopyTo(oa, 0);
+            else
+                throw new ArgumentException("Unsupported destination array type", nameof(array));
+        }
+
+        void ISerializable.GetObjectData (SerializationInfo info, StreamingContext context) {
+            throw new NotImplementedException();
+        }
+
+        void IDeserializationCallback.OnDeserialization (object? sender) {
+            throw new NotImplementedException();
+        }
     }
 }

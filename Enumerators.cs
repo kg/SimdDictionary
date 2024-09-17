@@ -8,8 +8,8 @@ using System.Threading.Tasks;
 using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
 
 namespace SimdDictionary {
-    public partial class SimdDictionary<K, V> : IDictionary<K, V>, ICloneable {
-        public struct KeyCollection : ICollection<K> {
+    public partial class SimdDictionary<K, V> {
+        public struct KeyCollection : ICollection<K>, ICollection {
             public readonly SimdDictionary<K, V> Dictionary;
 
             public struct Enumerator : IEnumerator<K> {
@@ -36,14 +36,14 @@ namespace SimdDictionary {
                 Dictionary = dictionary;
             }
 
-            int ICollection<K>.Count => Dictionary.Count;
+            public int Count => Dictionary.Count;
             bool ICollection<K>.IsReadOnly => true;
 
             void ICollection<K>.Add (K item) =>
-                throw new NotImplementedException();
+                throw new InvalidOperationException();
 
             void ICollection<K>.Clear () =>
-                throw new NotImplementedException();
+                Dictionary.Clear();
 
             bool ICollection<K>.Contains (K item) =>
                 Dictionary.ContainsKey(item);
@@ -64,10 +64,16 @@ namespace SimdDictionary {
                 GetEnumerator();
 
             bool ICollection<K>.Remove (K item) =>
+                Dictionary.Remove(item);
+
+            bool ICollection.IsSynchronized => false;
+            object ICollection.SyncRoot => Dictionary;
+            void ICollection.CopyTo(System.Array array, int index) {
                 throw new NotImplementedException();
+            }
         }
 
-        public struct ValueCollection : ICollection<V> {
+        public struct ValueCollection : ICollection<V>, ICollection {
             public readonly SimdDictionary<K, V> Dictionary;
 
             public struct Enumerator : IEnumerator<V> {
@@ -94,18 +100,18 @@ namespace SimdDictionary {
                 Dictionary = dictionary;
             }
 
-            int ICollection<V>.Count => Dictionary.Count;
+            public int Count => Dictionary.Count;
             bool ICollection<V>.IsReadOnly => true;
 
             void ICollection<V>.Add (V item) =>
-                throw new NotImplementedException();
+                throw new InvalidOperationException();
 
             void ICollection<V>.Clear () =>
-                throw new NotImplementedException();
+                Dictionary.Clear();
 
             // FIXME
             bool ICollection<V>.Contains (V item) =>
-                throw new NotImplementedException();
+                throw new InvalidOperationException();
 
             void ICollection<V>.CopyTo (V[] array, int arrayIndex) {
                 using (var e = GetEnumerator())
@@ -123,10 +129,16 @@ namespace SimdDictionary {
                 GetEnumerator();
 
             bool ICollection<V>.Remove (V item) =>
+                throw new InvalidOperationException();
+
+            bool ICollection.IsSynchronized => false;
+            object ICollection.SyncRoot => Dictionary;
+            void ICollection.CopyTo(System.Array array, int index) {
                 throw new NotImplementedException();
+            }
         }
 
-        public struct Enumerator : IEnumerator<KeyValuePair<K, V>> {
+        public struct Enumerator : IEnumerator<KeyValuePair<K, V>>, IDictionaryEnumerator {
             private int _bucketIndex, _valueIndex, _valueIndexLocal;
             private Bucket _currentBucket;
             private Bucket[] _buckets;
@@ -154,6 +166,17 @@ namespace SimdDictionary {
                 }
             }
             object IEnumerator.Current => Current;
+
+            DictionaryEntry IDictionaryEnumerator.Entry {
+                get {
+                    ref var entry = ref _entries[_valueIndex];
+                    return new DictionaryEntry(entry.Key, entry.Value);
+                }
+            }
+
+            object IDictionaryEnumerator.Key => CurrentKey;
+
+            object? IDictionaryEnumerator.Value => CurrentValue;
 
             public Enumerator (SimdDictionary<K, V> dictionary) {
                 _bucketIndex = -1;
