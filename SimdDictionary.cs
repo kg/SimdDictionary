@@ -1,6 +1,8 @@
 ﻿// This is considerably slower than power-of-two bucket counts, but it provides
 //  much better collision resistance than power-of-two bucket counts do
-#define PRIME_BUCKET_COUNTS
+// #define PRIME_BUCKET_COUNTS
+// Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
+#define PERMUTE_HASH_CODES
 // Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
 // #define FORCE_SCALAR_IMPLEMENTATION
 
@@ -218,13 +220,30 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static uint FinalizeHashCode (uint hashCode) {
+#if PERMUTE_HASH_CODES
+            // MurmurHash3 was written by Austin Appleby, and is placed in the public
+            // domain. The author hereby disclaims copyright to this source code.
+            // Finalization mix - force all bits of a hash block to avalanche
+            unchecked {
+	            hashCode ^= hashCode >> 16;
+	            hashCode *= 0x85ebca6b;
+	            hashCode ^= hashCode >> 13;
+	            hashCode *= 0xc2b2ae35;
+	            hashCode ^= hashCode >> 16;
+            }
+#endif
+            return hashCode;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
             if (typeof(K).IsValueType) {
                 if (comparer == null)
-                    return unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!));
+                    return FinalizeHashCode(unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!)));
             }
 
-            return unchecked((uint)comparer!.GetHashCode(key!));
+            return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
         }
 
         // The hash suffix is selected from 8 bits of the hash, and then modified to ensure
@@ -569,7 +588,11 @@ namespace SimdDictionary {
 
         object? IDictionary.this[object key] {
             get => this[(K)key];
+#pragma warning disable CS8600
+#pragma warning disable CS8601
             set => this[(K)key] = (V)value;
+#pragma warning restore CS8600
+#pragma warning restore CS8601
         }
 
         public void Add (K key, V value) {
@@ -785,7 +808,11 @@ namespace SimdDictionary {
         }
 
         void IDictionary.Add (object key, object? value) =>
+#pragma warning disable CS8600
+#pragma warning disable CS8604
             Add((K)key, (V)value);
+#pragma warning restore CS8600
+#pragma warning restore CS8604
 
         bool IDictionary.Contains (object key) =>
             ContainsKey((K)key);
