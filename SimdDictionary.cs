@@ -362,8 +362,6 @@ namespace SimdDictionary {
         internal struct ComparerKeySearcher : IKeySearcher {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
-                return 0;
-
                 return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
             }
 
@@ -373,9 +371,6 @@ namespace SimdDictionary {
                 [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
                 int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
-                matchIndexInBucket = -1;
-                return ref Unsafe.NullRef<Entry>();
-
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
@@ -531,10 +526,17 @@ namespace SimdDictionary {
 
                 var cascadeCount = bucket.GetSlot(CascadeSlot);
                 if (increase) {
+                    // Never overflow (wrap around) the counter
                     if (cascadeCount < 255)
                         bucket.SetSlot(CascadeSlot, (byte)(cascadeCount + 1));
                 } else {
-                    throw new NotImplementedException();
+                    if (cascadeCount == 0)
+                        Environment.FailFast("Corrupted dictionary bucket cascade slot");
+                    // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
+                    //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
+                    // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
+                    else if (cascadeCount < 255)
+                        bucket.SetSlot(CascadeSlot, (byte)(cascadeCount - 1));
                 }
             }
         }
@@ -544,9 +546,7 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : IKeySearcher 
         {
-            // This duplicates a lot of logic from FindValue, so I won't replicate its comments here. See FindValue for more info.
-            // FIXME: Find a way to code-share most of the control logic between findvalue/tryinsert/tryremove
-
+            // This duplicates a lot of logic from FindKey, so I won't replicate its comments here.
             if (_Count >= _GrowAtCount)
                 return InsertResult.NeedToGrow;
 
@@ -656,67 +656,54 @@ namespace SimdDictionary {
         internal bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : IKeySearcher
         {
+            // This duplicates a lot of logic from FindKey, so I won't replicate its comments here.
             if (_Count <= 0)
                 return false;
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var suffix = GetHashSuffix(hashCode);
+
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
-            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
-            var bucketIndex = initialBucketIndex;
-            // var searchVector = Vector128.Create(suffix);
-            ref var bucket = ref buckets[initialBucketIndex];
+            var suffix = GetHashSuffix(hashCode);
+
+            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+
+            ref Bucket lastBucket = ref Unsafe.NullRef<Bucket>(),
+                initialBucket = ref Unsafe.NullRef<Bucket>(),
+                bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
-                byte bucketCount = bucket.GetSlot(CountSlot);
-                int startIndex = FindSuffixInBucket(ref bucket, suffix),
-                    indexInBucket;
-
-                ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out indexInBucket);
+                int startIndex = FindSuffixInBucket(ref bucket, suffix);
+                ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref entry)) {
-                    Debug.Assert(bucketCount > 0);
-
                     _Count--;
                     RemoveFromBucket(ref bucket, indexInBucket, ref entry, ref firstBucketEntry);
-
-                    // We may have cascaded out of a previous bucket; if so, scan backwards and update
-                    //  the cascade count for every bucket we previously scanned.
-                    while (bucketIndex != initialBucketIndex) {
-                        bucketIndex--;
-                        if (bucketIndex < 0)
-                            bucketIndex = buckets.Length - 1;
-                        bucket = ref buckets[bucketIndex];
-
-                        var cascadeCount = bucket.GetSlot(CascadeSlot);
-                        if (cascadeCount == 0)
-                            Environment.FailFast("Corrupted dictionary bucket cascade slot");
-                        // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
-                        //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
-                        // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
-                        else if (cascadeCount < 255)
-                            bucket.SetSlot(CascadeSlot, (byte)(cascadeCount - 1));
-                    }
-
+                    if (!Unsafe.IsNullRef(ref initialBucket))
+                        AdjustCascadeCounts(buckets, ref bucket, ref initialBucket, ref lastBucket, false);
                     return true;
-                }
-
-                if (bucket.GetSlot(CascadeSlot) == 0)
+                } else if (bucket.GetSlot(CascadeSlot) == 0)
                     return false;
 
-                bucketIndex++;
-                if (bucketIndex >= buckets.Length) {
-                    bucketIndex = 0;
+                // We're checking multiple buckets, so initialize the loop control variables
+                if (Unsafe.IsNullRef(ref initialBucket)) {
+                    initialBucket = ref bucket;
+                    lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
+                }
+
+                if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                    // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
+                    //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
+                    // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
                     bucket = ref MemoryMarshal.GetReference(buckets);
                     firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                 } else {
                     bucket = ref Unsafe.Add(ref bucket, 1);
                     firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
                 }
-            } while (bucketIndex != initialBucketIndex);
+            } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
             return false;
         }
