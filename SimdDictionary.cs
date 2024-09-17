@@ -22,6 +22,7 @@ using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Wasm;
 using System.Runtime.Serialization;
+using System.Diagnostics.CodeAnalysis;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V> : 
@@ -312,28 +313,28 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ref Entry FindKeyInBucketWithDefaultComparer (ref Bucket bucket, ref Entry firstEntryInBucket, int indexInBucket, K needle, out int matchIndexInBucket) {
+        internal static ref Entry FindKeyInBucketWithDefaultComparer (
+            // We have to use UnscopedRef to allow lazy initialization of the key reference below.
+            [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+            int indexInBucket, K needle, out int matchIndexInBucket
+        ) {
             Debug.Assert(indexInBucket >= 0);
 
+            int count = bucket.GetSlot(CountSlot);
             // It might be faster on some targets to early-out before the address computation(s) below
             //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
-            //  and this implementation generates much smaller code
-            /*
-            if (indexInBucket >= count)
-                return ref Unsafe.NullRef<Entry>();
-            */
+            //  and this implementation generates smaller code
 
-            // We need to duplicate the loop header logic and move it inside the if, otherwise
-            //  count gets spilled to the stack.
             if (typeof(K).IsValueType) {
-                // FIXME: Potential reference past the end of the buckets array. Fixable by allocating an extra bucket as padding
-                ref var key = ref Unsafe.Add(ref bucket.Keys[0], indexInBucket);
-                for (int c = bucket.GetSlot(CountSlot), i = indexInBucket; i < c; i++) {
+                // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
+                ref var key = ref Unsafe.NullRef<K>();
+                for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
+                    if (Unsafe.IsNullRef(ref key))
+                        key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
                     if (EqualityComparer<K>.Default.Equals(needle, key)) {
-                        matchIndexInBucket = i;
-                        return ref Unsafe.Add(ref firstEntryInBucket, i);
+                        matchIndexInBucket = indexInBucket;
+                        return ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
                     }
-                    key = ref Unsafe.Add(ref key, 1);
                 }
             } else {
                 Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
@@ -344,36 +345,31 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static unsafe ref Entry FindKeyInBucket (ref Bucket bucket, ref Entry firstEntryInBucket, int indexInBucket, IEqualityComparer<K> comparer, K needle, out int matchIndexInBucket) {
-            throw new NotImplementedException();
-            /*
+        internal static unsafe ref Entry FindKeyInBucket (
+            // We have to use UnscopedRef to allow lazy initialization of the key reference below.
+            [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+            int indexInBucket, IEqualityComparer<K> comparer, K needle, out int matchIndexInBucket
+        ) {
             Debug.Assert(indexInBucket >= 0);
-            Debug.Assert(count <= BucketSizeI);
-            Debug.Assert(comparer != null);
 
+            int count = bucket.GetSlot(CountSlot);
             // It might be faster on some targets to early-out before the address computation(s) below
             //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
-            //  and this implementation generates much smaller code
-            // if (indexInBucket >= count)
-            //     return ref Unsafe.NullRef<Entry>();
+            //  and this implementation generates smaller code
 
-            // FIXME: Load comparer field on-demand here to optimize the 'no match' case?
-            // Comparing entry directly against lastEntry produces smaller code than doing
-            //  indexInBucket++ <= count in the loop
-            ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
-            // HACK: We ensure this is safe by allocating space for exactly one additional entry at the end of the entries array
-                lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
-            while (Unsafe.IsAddressLessThan(ref entry, ref lastEntry)) {
-                // FIXME: SCG.Dictionary does a hashcode comparison first, but we don't store the hashcode in the entry.
-                // For expensive comparers, it might be necessary to do this. But the suffix encodes 8 bits of the hash, and
-                //  the bucket index encodes another few bits as well, so it is less necessary than it is in SCG.Dictionary
-                if (comparer.Equals(needle, entry.Key))
-                    return ref entry;
-                entry = ref Unsafe.Add(ref entry, 1);
+            // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
+            ref var key = ref Unsafe.NullRef<K>();
+            for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
+                if (Unsafe.IsNullRef(ref key))
+                    key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
+                if (comparer.Equals(needle, key)) {
+                    matchIndexInBucket = indexInBucket;
+                    return ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
+                }
             }
 
+            matchIndexInBucket = -1;
             return ref Unsafe.NullRef<Entry>();
-            */
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
