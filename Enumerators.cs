@@ -5,7 +5,6 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
-using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V> {
@@ -147,7 +146,7 @@ namespace SimdDictionary {
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    return _entries[_valueIndex].Key;
+                    return _currentBucket.Keys[_valueIndexLocal];
                 }
             }
 
@@ -162,7 +161,7 @@ namespace SimdDictionary {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     ref var entry = ref _entries[_valueIndex];
-                    return new KeyValuePair<K, V>(entry.Key, entry.Value);
+                    return new KeyValuePair<K, V>(_currentBucket.Keys[_valueIndexLocal], entry.Value);
                 }
             }
             object IEnumerator.Current => Current;
@@ -170,7 +169,7 @@ namespace SimdDictionary {
             DictionaryEntry IDictionaryEnumerator.Entry {
                 get {
                     ref var entry = ref _entries[_valueIndex];
-                    return new DictionaryEntry(entry.Key, entry.Value);
+                    return new DictionaryEntry(_currentBucket.Keys[_valueIndexLocal], entry.Value);
                 }
             }
 

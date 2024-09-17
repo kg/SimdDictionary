@@ -21,36 +21,45 @@ using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Wasm;
-using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
 using System.Runtime.Serialization;
 
 namespace SimdDictionary {
-    internal unsafe static class BucketExtensions {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static byte GetSlot (this ref readonly Bucket self, int index) {
-            Debug.Assert(index < Bucket.Count);
-            // the extract-lane opcode this generates is slower than doing a byte load from memory,
-            //  even if we already have the bucket in a register. not sure why.
-            // return self[index];
-            // index &= 15;
-            return Unsafe.AddByteOffset(ref Unsafe.As<Bucket, byte>(ref Unsafe.AsRef(in self)), index);
-        }
-
-        // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void SetSlot (this ref Bucket self, nuint index, byte value) {
-            Debug.Assert(index < (nuint)Bucket.Count);
-            // index &= 15;
-            Unsafe.AddByteOffset(ref Unsafe.As<Bucket, byte>(ref self), index) = value;
-        }
-    }
-
     public partial class SimdDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
         ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
         where K : notnull
     {
-        internal record struct Entry (K Key, V Value);
+        // This size must match BucketSizeI/U
+        [InlineArray(8)]
+        internal struct InlineKeyArray {
+            public K Key0;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 16)]
+        internal struct Bucket {
+            public Vector128<byte> Suffixes;
+            public InlineKeyArray Keys;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public readonly byte GetSlot (int index) {
+                Debug.Assert(index < Vector128<byte>.Count);
+                // the extract-lane opcode this generates is slower than doing a byte load from memory,
+                //  even if we already have the bucket in a register. not sure why.
+                // return self[index];
+                // index &= 15;
+                return Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), index);
+            }
+
+            // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void SetSlot (nuint index, byte value) {
+                Debug.Assert(index < (nuint)Vector128<byte>.Count);
+                // index &= 15;
+                Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index) = value;
+            }
+        }
+
+        internal record struct Entry (V Value);
 
         public enum InsertMode {
             // Fail the insertion if a matching key is found
@@ -78,7 +87,7 @@ namespace SimdDictionary {
             //  to maintain an ideal load factor. FIXME: 120 isn't right
             OversizePercentage = 120,
             // TODO: A BucketSize of 8 would waste 4 slots in every bucket, but would turn some imuls into shifts
-            BucketSizeI = 14,
+            BucketSizeI = 8,
             CountSlot = 14,
             CascadeSlot = 15;
 
@@ -87,7 +96,7 @@ namespace SimdDictionary {
             //  more likely that a bad hash will collide at the top bit
             //  than at the bottom (i.e. using an int/ptr as its own hash)
             SuffixSalt = 0b10000000,
-            BucketSizeU = 14;
+            BucketSizeU = 8;
 
 #if PRIME_BUCKET_COUNTS
         private ulong _fastModMultiplier;
@@ -157,6 +166,8 @@ namespace SimdDictionary {
         }
 
         internal void Resize (int capacity) {
+            Debug.Assert(BucketSizeI == BucketSizeU);
+
             int bucketCount;
             checked {
                 capacity = (int)((long)capacity * OversizePercentage / 100);
@@ -212,7 +223,7 @@ namespace SimdDictionary {
                         continue;
 
                     ref var entry = ref oldEntries[baseIndex + j];
-                    if (TryInsert(entry.Key, entry.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                    if (TryInsert(bucket.Keys[j], entry.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
                         return false;
                 }
             }
@@ -273,11 +284,11 @@ namespace SimdDictionary {
         internal static unsafe int FindSuffixInBucket (ref Bucket bucket, byte suffix) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
-                return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket)));
+                return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket.Suffixes)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
                 var laneBits = AdvSimd.And(
-                    AdvSimd.CompareEqual(Vector128.Create(suffix), bucket), 
+                    AdvSimd.CompareEqual(Vector128.Create(suffix), bucket.Suffixes), 
                     Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128)
                 );
                 var moveMask = AdvSimd.Arm64.AddAcross(laneBits.GetLower()).ToScalar() |
@@ -285,7 +296,7 @@ namespace SimdDictionary {
                 return BitOperations.TrailingZeroCount(moveMask);
             } else if (PackedSimd.IsSupported) {
                 // Completely untested
-                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(Vector128.Create(suffix), bucket)));
+                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(Vector128.Create(suffix), bucket.Suffixes)));
             } else {
 #else
             {
@@ -301,9 +312,8 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ref Entry FindKeyInBucketWithDefaultComparer (byte count, ref Entry firstEntryInBucket, int indexInBucket, K needle) {
+        internal static ref Entry FindKeyInBucketWithDefaultComparer (ref Bucket bucket, ref Entry firstEntryInBucket, int indexInBucket, K needle, out int matchIndexInBucket) {
             Debug.Assert(indexInBucket >= 0);
-            Debug.Assert(count <= BucketSizeI);
 
             // It might be faster on some targets to early-out before the address computation(s) below
             //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
@@ -316,28 +326,27 @@ namespace SimdDictionary {
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
             if (typeof(K).IsValueType) {
-                // We do this instead of a for-loop so we can skip ReadKey when there's no match,
-                //  which improves performance for missing items and/or hash collisions
-                // FIXME: Can we fuse this with the while loop termination condition somehow?
-                // Comparing entry directly against lastEntry produces smaller code than doing
-                //  indexInBucket++ <= count in the loop
-                ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
-                // HACK: We ensure this is safe by allocating space for exactly one additional entry at the end of the entries array
-                    lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
-                while (Unsafe.IsAddressLessThan(ref entry, ref lastEntry)) {
-                    if (EqualityComparer<K>.Default.Equals(needle, entry.Key))
-                        return ref entry;
-                    entry = ref Unsafe.Add(ref entry, 1);
+                // FIXME: Potential reference past the end of the buckets array. Fixable by allocating an extra bucket as padding
+                ref var key = ref Unsafe.Add(ref bucket.Keys[0], indexInBucket);
+                for (int c = bucket.GetSlot(CountSlot), i = indexInBucket; i < c; i++) {
+                    if (EqualityComparer<K>.Default.Equals(needle, key)) {
+                        matchIndexInBucket = i;
+                        return ref Unsafe.Add(ref firstEntryInBucket, i);
+                    }
+                    key = ref Unsafe.Add(ref key, 1);
                 }
             } else {
                 Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
             }
 
+            matchIndexInBucket = -1;
             return ref Unsafe.NullRef<Entry>();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ref Entry FindKeyInBucket (byte count, ref Entry firstEntryInBucket, int indexInBucket, IEqualityComparer<K> comparer, K needle) {
+        internal static unsafe ref Entry FindKeyInBucket (ref Bucket bucket, ref Entry firstEntryInBucket, int indexInBucket, IEqualityComparer<K> comparer, K needle, out int matchIndexInBucket) {
+            throw new NotImplementedException();
+            /*
             Debug.Assert(indexInBucket >= 0);
             Debug.Assert(count <= BucketSizeI);
             Debug.Assert(comparer != null);
@@ -345,10 +354,8 @@ namespace SimdDictionary {
             // It might be faster on some targets to early-out before the address computation(s) below
             //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
             //  and this implementation generates much smaller code
-            /*
-            if (indexInBucket >= count)
-                return ref Unsafe.NullRef<Entry>();
-            */
+            // if (indexInBucket >= count)
+            //     return ref Unsafe.NullRef<Entry>();
 
             // FIXME: Load comparer field on-demand here to optimize the 'no match' case?
             // Comparing entry directly against lastEntry produces smaller code than doing
@@ -366,6 +373,7 @@ namespace SimdDictionary {
             }
 
             return ref Unsafe.NullRef<Entry>();
+            */
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -396,9 +404,8 @@ namespace SimdDictionary {
 
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
 
-            // FIXME: There are two range checks here for buckets, first initialBucketIndex and then buckets.Length - 1.
-            // We know by definition that buckets.Length - 1 can't fail the range check as long as the bucket count is more than 0,
-            //  and we always allocate at least one bucket. So we can probably optimize the range check out somehow.
+            // Capture the buckets span into three refs instead so the span can go out of scope and we can do everything
+            //  inside the loop via raw address comparisons instead
             ref Bucket bucketZero = ref MemoryMarshal.GetReference(buckets),
                 // We can use Unsafe.Add here because we know these two indices are already within bounds;
                 //  the first is calculated by BucketIndexForHashCode (either masked with & or modulus),
@@ -418,7 +425,7 @@ namespace SimdDictionary {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                     // Using a cmov to conditionally perform the count GetSlot also isn't faster
-                    ref var entry = ref FindKeyInBucketWithDefaultComparer(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, key);
+                    ref var entry = ref FindKeyInBucketWithDefaultComparer(ref bucket, ref firstBucketEntry, startIndex, key, out _);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
                             return ref Unsafe.NullRef<Entry>();
@@ -442,7 +449,7 @@ namespace SimdDictionary {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                     // Using a cmov to conditionally perform the count GetSlot also isn't faster
-                    ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, comparer!, key);
+                    ref var entry = ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out _);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
                             return ref Unsafe.NullRef<Entry>();
@@ -483,12 +490,11 @@ namespace SimdDictionary {
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
-                byte bucketCount = bucket.GetSlot(CountSlot);
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     ref Entry entry = ref (typeof(K).IsValueType && (comparer == null))
-                            ? ref FindKeyInBucketWithDefaultComparer(bucketCount, ref firstBucketEntry, startIndex, key)
-                            : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer!, key);
+                            ? ref FindKeyInBucketWithDefaultComparer(ref bucket, ref firstBucketEntry, startIndex, key, out _)
+                            : ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out _);
 
                     if (!Unsafe.IsNullRef(ref entry)) {
                         if (mode == InsertMode.EnsureUnique)
@@ -502,12 +508,14 @@ namespace SimdDictionary {
                     }
                 }
 
+                byte bucketCount = bucket.GetSlot(CountSlot);
                 if (bucketCount < BucketSizeU) {
                     unchecked {
                         ref var entry = ref Unsafe.Add(ref firstBucketEntry, bucketCount);
                         bucket.SetSlot(CountSlot, (byte)(bucketCount + 1));
                         bucket.SetSlot(bucketCount, suffix);
-                        entry = new Entry(key, value);
+                        bucket.Keys[bucketCount] = key;
+                        entry = new Entry(value);
                     }
 
                     // We may have cascaded out of a previous bucket; if so, scan backwards and update
@@ -670,22 +678,18 @@ namespace SimdDictionary {
 
             do {
                 byte bucketCount = bucket.GetSlot(CountSlot);
-                int startIndex = FindSuffixInBucket(ref bucket, suffix);
+                int startIndex = FindSuffixInBucket(ref bucket, suffix),
+                    indexInBucket;
 
                 ref var entry = ref 
                     (typeof(K).IsValueType && (comparer == null))
-                        ? ref FindKeyInBucketWithDefaultComparer(bucketCount, ref firstBucketEntry, startIndex, key)
-                        : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer!, key);
+                        ? ref FindKeyInBucketWithDefaultComparer(ref bucket, ref firstBucketEntry, startIndex, key, out indexInBucket)
+                        : ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref entry)) {
                     Debug.Assert(bucketCount > 0);
 
                     unchecked {
-#pragma warning disable CS8500
-                        // FIXME: Why isn't there an Unsafe.Offset?
-                        int indexInBucket = (int)(Unsafe.ByteOffset(ref firstBucketEntry, ref entry) / sizeof(Entry));
-                        Debug.Assert((Unsafe.ByteOffset(ref firstBucketEntry, ref entry) % sizeof(Entry)) == 0);
-#pragma warning restore CS8500
                         int replacementIndexInBucket = bucketCount - 1;
                         bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
                         if (indexInBucket != replacementIndexInBucket) {
@@ -693,10 +697,15 @@ namespace SimdDictionary {
                             bucket.SetSlot((uint)replacementIndexInBucket, 0);
                             ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
                             entry = replacementEntry;
+                            bucket.Keys[indexInBucket] = bucket.Keys[replacementIndexInBucket];
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                                bucket.Keys[replacementIndexInBucket] = default!;
                             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                                 replacementEntry = default;
                         } else {
                             bucket.SetSlot((uint)indexInBucket, 0);
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                                bucket.Keys[indexInBucket] = default!;
                             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                                 entry = default;
                         }
@@ -774,10 +783,11 @@ namespace SimdDictionary {
             ref var firstBucketEntry = ref MemoryMarshal.GetReference(entries);
 
             for (int i = 0; i < buckets.Length; i++) {
-                var bucketCount = buckets[i].GetSlot(CountSlot);
+                ref var bucket = ref buckets[i];
+                var bucketCount = bucket.GetSlot(CountSlot);
                 for (int j = 0; j < bucketCount; j++) {
                     ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    array[index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
+                    array[index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
                 }
 
                 firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
@@ -798,10 +808,11 @@ namespace SimdDictionary {
             ref var firstBucketEntry = ref MemoryMarshal.GetReference(entries);
 
             for (int i = 0; i < buckets.Length; i++) {
-                var bucketCount = buckets[i].GetSlot(CountSlot);
+                ref var bucket = ref buckets[i];
+                var bucketCount = bucket.GetSlot(CountSlot);
                 for (int j = 0; j < bucketCount; j++) {
                     ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    array[index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
+                    array[index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
                 }
 
                 firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
