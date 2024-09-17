@@ -25,7 +25,7 @@ namespace SimdDictionary {
     internal unsafe static class BucketExtensions {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte GetSlot (this ref readonly Bucket self, int index) {
-            Debug.Assert(index < 16);
+            Debug.Assert(index < Bucket.Count);
             // the extract-lane opcode this generates is slower than doing a byte load from memory,
             //  even if we already have the bucket in a register. not sure why.
             // return self[index];
@@ -36,9 +36,9 @@ namespace SimdDictionary {
         // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void SetSlot (this ref Bucket self, nuint index, byte value) {
-            Debug.Assert(index < 16);
+            Debug.Assert(index < (nuint)Bucket.Count);
             // index &= 15;
-            Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref self), index) = value;
+            Unsafe.AddByteOffset(ref Unsafe.As<Bucket, byte>(ref self), index) = value;
         }
     }
 
