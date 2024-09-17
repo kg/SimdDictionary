@@ -416,8 +416,6 @@ namespace SimdDictionary {
             if (typeof(K).IsValueType && (comparer == null)) {
                 // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
                 do {
-                    // Calculating startIndex before the GetSlot call reduces code size slightly, and causes the indirect load
-                    //  for the vectorized compare to precede the GetSlot operation, which is probably ideal
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                     // Using a cmov to conditionally perform the count GetSlot also isn't faster
@@ -443,8 +441,6 @@ namespace SimdDictionary {
                 Debug.Assert(comparer != null);
                 do {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    // Using a cmov to conditionally perform the count GetSlot also isn't faster
                     ref var entry = ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out _);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
@@ -507,10 +503,11 @@ namespace SimdDictionary {
                 byte bucketCount = bucket.GetSlot(CountSlot);
                 if (bucketCount < BucketSizeU) {
                     unchecked {
+                        ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), bucketCount);
                         ref var entry = ref Unsafe.Add(ref firstBucketEntry, bucketCount);
                         bucket.SetSlot(CountSlot, (byte)(bucketCount + 1));
                         bucket.SetSlot(bucketCount, suffix);
-                        bucket.Keys[bucketCount] = key;
+                        newKey = key;
                         entry = new Entry(value);
                     }
 
@@ -686,22 +683,24 @@ namespace SimdDictionary {
                     Debug.Assert(bucketCount > 0);
 
                     unchecked {
+                        ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
                         int replacementIndexInBucket = bucketCount - 1;
                         bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
                         if (indexInBucket != replacementIndexInBucket) {
                             bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                             bucket.SetSlot((uint)replacementIndexInBucket, 0);
+                            ref var replacementKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), replacementIndexInBucket);
                             ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
                             entry = replacementEntry;
-                            bucket.Keys[indexInBucket] = bucket.Keys[replacementIndexInBucket];
+                            newKey = replacementKey;
                             if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
-                                bucket.Keys[replacementIndexInBucket] = default!;
+                                replacementKey = default!;
                             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                                 replacementEntry = default;
                         } else {
                             bucket.SetSlot((uint)indexInBucket, 0);
                             if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
-                                bucket.Keys[indexInBucket] = default!;
+                                newKey = default!;
                             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                                 entry = default;
                         }
