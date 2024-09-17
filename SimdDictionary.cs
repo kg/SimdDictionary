@@ -1,5 +1,7 @@
 ﻿// This is considerably slower than power-of-two bucket counts, but it provides
-//  much better collision resistance than power-of-two bucket counts do
+//  much better collision resistance than power-of-two bucket counts do. However,
+// Murmur3 finalization + Power-of-two bucket counts (see below) performs much better and has
+//  higher collision resistance due to improving the quality of suffixes
 // #define PRIME_BUCKET_COUNTS
 // Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
 #define PERMUTE_HASH_CODES
@@ -7,14 +9,10 @@
 // #define FORCE_SCALAR_IMPLEMENTATION
 
 using System;
-using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing;
-using System.Net.Sockets;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -251,10 +249,8 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
-            if (typeof(K).IsValueType) {
-                if (comparer == null)
-                    return FinalizeHashCode(unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!)));
-            }
+            if (typeof(K).IsValueType && (comparer == null))
+                return FinalizeHashCode(unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!)));
 
             return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
         }
@@ -312,6 +308,7 @@ namespace SimdDictionary {
             }
         }
 
+#pragma warning disable CS8619
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static ref Entry FindKeyInBucketWithDefaultComparer (
             // We have to use UnscopedRef to allow lazy initialization of the key reference below.
@@ -371,9 +368,14 @@ namespace SimdDictionary {
             matchIndexInBucket = -1;
             return ref Unsafe.NullRef<Entry>();
         }
+#pragma warning restore CS8619
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // FIXME: Split this method into two versions, one for vt-with-default-comparer and one for the slow path
+        // Doing that will prune out the vt path entirely for reftype keys and also produce smaller code for fast path
         internal ref Entry FindKey (K key) {
+            // If count is 0 our buckets/entries might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
+            //  so we need to bail out early for an empty collection.
             if (_Count == 0)
                 return ref Unsafe.NullRef<Entry>();
 
@@ -409,6 +411,7 @@ namespace SimdDictionary {
                 initialBucket = ref Unsafe.Add(ref bucketZero, initialBucketIndex),
                 lastBucket = ref Unsafe.Add(ref bucketZero, buckets.Length - 1),
                 bucket = ref initialBucket;
+            // Intentionally bounds-check this entry index (do we need to, though?)
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check

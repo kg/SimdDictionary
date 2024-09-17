@@ -13,6 +13,7 @@ namespace Benchmarks {
     public class BCLInsertion : Insertion<Dictionary<TKey, TValue>> {
     }
 
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     public class BCLLookup : Lookup<Dictionary<TKey, TValue>> { 
         protected override bool TryGetValue (long key, out long value) =>
             Dict.TryGetValue(key, out value);
