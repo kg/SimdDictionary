@@ -245,14 +245,14 @@ namespace SimdDictionary {
 #endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        internal static unsafe int FindSuffixInBucket (Bucket bucket, Bucket searchVector) {
+        internal static unsafe int FindSuffixInBucket (ref Bucket bucket, byte suffix) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
-                return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket)));
+                return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
                 var laneBits = AdvSimd.And(
-                    AdvSimd.CompareEqual(searchVector, bucket), 
+                    AdvSimd.CompareEqual(Vector128.Create(suffix), bucket), 
                     Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128)
                 );
                 var moveMask = AdvSimd.Arm64.AddAcross(laneBits.GetLower()).ToScalar() |
@@ -260,16 +260,15 @@ namespace SimdDictionary {
                 return BitOperations.TrailingZeroCount(moveMask);
             } else if (PackedSimd.IsSupported) {
                 // Completely untested
-                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(searchVector, bucket)));
+                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(Vector128.Create(suffix), bucket)));
             } else {
 #else
             {
 #endif
-                byte needle = searchVector[0];
                 var haystack = (byte*)Unsafe.AsPointer(ref bucket);
                 // FIXME: Hand-unrolling into a chain of cmovs like in dn_simdhash doesn't work.
                 for (int i = 0, c = bucket.GetSlot(CountSlot); i < c; i++) {
-                    if (haystack[i] == needle)
+                    if (haystack[i] == suffix)
                         return i;
                 }
                 return 32;
@@ -351,7 +350,10 @@ namespace SimdDictionary {
 
             var comparer = Comparer;
             var hashCode = GetHashCode(comparer, key);
-            var searchVector = Vector128.Create(GetHashSuffix(hashCode));
+            // FIXME: RyuJIT cannot 'see through' FindSuffixInBucket even though it's inlined, so it ends up assigning
+            //  searchVector to xmm6, which requires the jitcode to preserve xmm6's previous value on entry and restore
+            //  it on exit, wasting valuable memory bandwidth. So we have to construct it on-demand instead. :(
+            // var searchVector = Vector128.Create(suffix);
 
             var buckets = (Span<Bucket>)_Buckets;
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
@@ -360,6 +362,12 @@ namespace SimdDictionary {
             // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
             //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
+            // Unfortunately this eats a valuable register and as a result something gets spilled to the stack :( Still probably
+            //  better than having to save/restore xmm6 every time, though.
+            // I tested storing the suffix in a Vector128 to try and use a vector register, but RyuJIT assigns it to xmm6. Not sure
+            //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the inlined
+            //  method calls for the comparer, etc, and the problem is that the vector has to live across method calls.
+            var suffix = GetHashSuffix(hashCode);
 
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
 
@@ -378,7 +386,7 @@ namespace SimdDictionary {
                 do {
                     // Calculating startIndex before the GetSlot call reduces code size slightly, and causes the indirect load
                     //  for the vectorized compare to precede the GetSlot operation, which is probably ideal
-                    int startIndex = FindSuffixInBucket(bucket, searchVector);
+                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                     // Using a cmov to conditionally perform the count GetSlot also isn't faster
                     ref var entry = ref FindKeyInBucketWithDefaultComparer(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, key);
@@ -389,8 +397,8 @@ namespace SimdDictionary {
                         return ref entry;
 
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref buckets[0];
-                        firstBucketEntry = ref entries[0];
+                        bucket = ref MemoryMarshal.GetReference(buckets);
+                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
                         firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
@@ -399,7 +407,7 @@ namespace SimdDictionary {
             } else {
                 Debug.Assert(comparer != null);
                 do {
-                    int startIndex = FindSuffixInBucket(bucket, searchVector);
+                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                     // Using a cmov to conditionally perform the count GetSlot also isn't faster
                     ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, comparer!, key);
@@ -410,8 +418,8 @@ namespace SimdDictionary {
                         return ref entry;
 
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref buckets[0];
-                        firstBucketEntry = ref entries[0];
+                        bucket = ref MemoryMarshal.GetReference(buckets);
+                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
                         firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
@@ -438,14 +446,14 @@ namespace SimdDictionary {
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var bucketIndex = initialBucketIndex;
-            var searchVector = Vector128.Create(suffix);
+            // var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
                 byte bucketCount = bucket.GetSlot(CountSlot);
                 if (mode != InsertMode.Rehashing) {
-                    int startIndex = FindSuffixInBucket(bucket, searchVector);
+                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     ref Entry entry = ref (typeof(K).IsValueType && (comparer == null))
                             ? ref FindKeyInBucketWithDefaultComparer(bucketCount, ref firstBucketEntry, startIndex, key)
                             : ref FindKeyInBucket(bucketCount, ref firstBucketEntry, startIndex, comparer!, key);
@@ -489,8 +497,8 @@ namespace SimdDictionary {
                 bucketIndex++;
                 if (bucketIndex >= buckets.Length) {
                     bucketIndex = 0;
-                    bucket = ref buckets[0];
-                    firstBucketEntry = ref entries[0];
+                    bucket = ref MemoryMarshal.GetReference(buckets);
+                    firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                 } else {
                     bucket = ref Unsafe.Add(ref bucket, 1);
                     firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
@@ -588,13 +596,13 @@ namespace SimdDictionary {
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var bucketIndex = initialBucketIndex;
-            var searchVector = Vector128.Create(suffix);
+            // var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
                 byte bucketCount = bucket.GetSlot(CountSlot);
-                int startIndex = FindSuffixInBucket(bucket, searchVector);
+                int startIndex = FindSuffixInBucket(ref bucket, suffix);
 
                 ref var entry = ref 
                     (typeof(K).IsValueType && (comparer == null))
@@ -653,8 +661,8 @@ namespace SimdDictionary {
                 bucketIndex++;
                 if (bucketIndex >= buckets.Length) {
                     bucketIndex = 0;
-                    bucket = ref buckets[0];
-                    firstBucketEntry = ref entries[0];
+                    bucket = ref MemoryMarshal.GetReference(buckets);
+                    firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                 } else {
                     bucket = ref Unsafe.Add(ref bucket, 1);
                     firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
