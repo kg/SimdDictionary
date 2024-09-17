@@ -77,6 +77,7 @@ namespace SimdDictionary {
             // User-specified capacity values will be increased to this percentage in order
             //  to maintain an ideal load factor. FIXME: 120 isn't right
             OversizePercentage = 120,
+            // TODO: A BucketSize of 8 would waste 4 slots in every bucket, but would turn some imuls into shifts
             BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;
@@ -368,7 +369,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref Entry FindKey (K key) {
+        internal unsafe ref Entry FindKey (K key) {
             if (_Count == 0)
                 return ref Unsafe.NullRef<Entry>();
 
@@ -378,10 +379,10 @@ namespace SimdDictionary {
             var buckets = (Span<Bucket>)_Buckets;
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
             //  entries array that is too big for the buckets array we've captured above. This is ensured by a barrier in Resize
-            var entries = (Span<Entry>)_Entries;
+            // var entries = (Span<Entry>)_Entries;
             // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
             //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
-            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
+            int initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             // Unfortunately this eats a valuable register and as a result something gets spilled to the stack :( Still probably
             //  better than having to save/restore xmm6 every time, though.
             // I tested storing the suffix in a Vector128 to try and use a vector register, but RyuJIT assigns it to xmm6. Not sure
@@ -393,30 +394,25 @@ namespace SimdDictionary {
             //  it on exit, wasting valuable memory bandwidth. So we have to construct it on-demand instead. :(
             // var searchVector = Vector128.Create(suffix);
 
-            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+            // Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
 
             // FIXME: There are two range checks here for buckets, first initialBucketIndex and then buckets.Length - 1.
             // We know by definition that buckets.Length - 1 can't fail the range check as long as the bucket count is more than 0,
             //  and we always allocate at least one bucket. So we can probably optimize the range check out somehow.
-            ref Bucket bucketZero = ref MemoryMarshal.GetReference(buckets),
-                // We can use Unsafe.Add here because we know these two indices are already within bounds;
-                //  the first is calculated by BucketIndexForHashCode (either masked with & or modulus),
-                //  and the second is buckets.Length - 1, so it can never be out of range.
-                initialBucket = ref Unsafe.Add(ref bucketZero, initialBucketIndex),
-                lastBucket = ref Unsafe.Add(ref bucketZero, buckets.Length - 1),
-                bucket = ref initialBucket;
-            ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
+            ref Bucket bucket = ref buckets[initialBucketIndex];
 
             // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
             //  to keep ryujit happy
             if (typeof(K).IsValueType && (comparer == null)) {
                 // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
-                do {
+                while (true) {
                     // Calculating startIndex before the GetSlot call reduces code size slightly, and causes the indirect load
                     //  for the vectorized compare to precede the GetSlot operation, which is probably ideal
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                     // Using a cmov to conditionally perform the count GetSlot also isn't faster
+                    int bucketIndex = (int)(Unsafe.ByteOffset(ref MemoryMarshal.GetReference(buckets), bucket) / sizeof(Bucket));
+                    ref var firstBucketEntry = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_Entries), bucketIndex * BucketSizeI);
                     ref var entry = ref FindKeyInBucketWithDefaultComparer(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, key);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
@@ -424,38 +420,20 @@ namespace SimdDictionary {
                     } else
                         return ref entry;
 
-                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                    bucketIndex++;
+                    if (bucketIndex >= buckets.Length) {
                         // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
                         //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
                         // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
-                        bucket = ref bucketZero;
-                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+                        bucket = ref MemoryMarshal.GetReference(buckets);
+                    } else if (bucketIndex == initialBucketIndex) {
+                        break;
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
-                        firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
                     }
-                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
+                }
             } else {
-                Debug.Assert(comparer != null);
-                do {
-                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    // Using a cmov to conditionally perform the count GetSlot also isn't faster
-                    ref var entry = ref FindKeyInBucket(bucket.GetSlot(CountSlot), ref firstBucketEntry, startIndex, comparer!, key);
-                    if (Unsafe.IsNullRef(ref entry)) {
-                        if (bucket.GetSlot(CascadeSlot) == 0)
-                            return ref Unsafe.NullRef<Entry>();
-                    } else
-                        return ref entry;
-
-                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref bucketZero;
-                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
-                    } else {
-                        bucket = ref Unsafe.Add(ref bucket, 1);
-                        firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
-                    }
-                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
+                throw new NotImplementedException();
             }
 
             return ref Unsafe.NullRef<Entry>();
