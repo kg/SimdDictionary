@@ -29,6 +29,8 @@ namespace SimdDictionary {
         where K : notnull
     {
         // This size must match BucketSizeI/U
+        // A size of 4 or 8 would turn some imuls into shifts, but the impact of that seems small compared
+        //  to the wasted memory
         [InlineArray(14)]
         internal struct InlineKeyArray {
             public K Key0;
@@ -227,6 +229,11 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static uint FinalizeHashCode (uint hashCode) {
+            // TODO: Use static interface methods to determine whether we need to finalize the hash for type K.
+            // For BCL types like int32/int64, we need to, but for types with strong hashes like string, we don't,
+            //  and for custom comparers, we don't need to do it since the caller is kind of responsible for 
+            //  bringing their own quality hash if they want good performance.
+            // Doing this would improve best-case performance for key types like Object or String.
 #if PERMUTE_HASH_CODES
             // MurmurHash3 was written by Austin Appleby, and is placed in the public
             // domain. The author hereby disclaims copyright to this source code.
@@ -240,14 +247,6 @@ namespace SimdDictionary {
             }
 #endif
             return hashCode;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
-            if (typeof(K).IsValueType && (comparer == null))
-                return FinalizeHashCode(unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!)));
-
-            return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
         }
 
         // The hash suffix is selected from 8 bits of the hash, and then modified to ensure
@@ -267,9 +266,9 @@ namespace SimdDictionary {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
 #if PRIME_BUCKET_COUNTS
-        unchecked((int)HashHelpers.FastMod(hashCode, (uint)buckets.Length, _fastModMultiplier));
+            unchecked((int)HashHelpers.FastMod(hashCode, (uint)buckets.Length, _fastModMultiplier));
 #else
-        unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
+            unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
 #endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -304,78 +303,116 @@ namespace SimdDictionary {
         }
 
 #pragma warning disable CS8619
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ref Entry FindKeyInBucketWithDefaultComparer (
-            // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-            [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
-            int indexInBucket, K needle, out int matchIndexInBucket
-        ) {
-            Debug.Assert(indexInBucket >= 0);
+        // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
+        //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
+        internal interface IKeySearcher {
+            static abstract ref Entry FindKeyInBucket (
+                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket,
+                int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+            );
 
-            int count = bucket.GetSlot(CountSlot);
-            // It might be faster on some targets to early-out before the address computation(s) below
-            //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
-            //  and this implementation generates smaller code
+            static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
+        }
 
-            if (typeof(K).IsValueType) {
+        internal struct DefaultComparerKeySearcher : IKeySearcher {
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
+                return FinalizeHashCode(unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!)));
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static ref Entry FindKeyInBucket (
+                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+                int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+            ) {
+                Debug.Assert(indexInBucket >= 0);
+
+                int count = bucket.GetSlot(CountSlot);
+                // It might be faster on some targets to early-out before the address computation(s) below
+                //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
+                //  and this implementation generates smaller code
+
+                if (typeof(K).IsValueType) {
+                    // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
+                    ref var key = ref Unsafe.NullRef<K>();
+                    for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
+                        if (Unsafe.IsNullRef(ref key))
+                            key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
+                        if (EqualityComparer<K>.Default.Equals(needle, key)) {
+                            matchIndexInBucket = indexInBucket;
+                            return ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
+                        }
+                    }
+                } else {
+                    Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
+                }
+
+                matchIndexInBucket = -1;
+                return ref Unsafe.NullRef<Entry>();
+            }
+        }
+
+        internal struct ComparerKeySearcher : IKeySearcher {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
+                return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static ref Entry FindKeyInBucket (
+                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+                int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+            ) {
+                Debug.Assert(indexInBucket >= 0);
+                Debug.Assert(comparer != null);
+
+                int count = bucket.GetSlot(CountSlot);
+                // It might be faster on some targets to early-out before the address computation(s) below
+                //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
+                //  and this implementation generates smaller code
+
                 // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                 ref var key = ref Unsafe.NullRef<K>();
                 for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
                     if (Unsafe.IsNullRef(ref key))
                         key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
-                    if (EqualityComparer<K>.Default.Equals(needle, key)) {
+                    if (comparer!.Equals(needle, key)) {
                         matchIndexInBucket = indexInBucket;
                         return ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
                     }
                 }
-            } else {
-                Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
+
+                matchIndexInBucket = -1;
+                return ref Unsafe.NullRef<Entry>();
             }
-
-            matchIndexInBucket = -1;
-            return ref Unsafe.NullRef<Entry>();
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static unsafe ref Entry FindKeyInBucket (
-            // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-            [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
-            int indexInBucket, IEqualityComparer<K> comparer, K needle, out int matchIndexInBucket
-        ) {
-            Debug.Assert(indexInBucket >= 0);
-
-            int count = bucket.GetSlot(CountSlot);
-            // It might be faster on some targets to early-out before the address computation(s) below
-            //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
-            //  and this implementation generates smaller code
-
-            // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
-            ref var key = ref Unsafe.NullRef<K>();
-            for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
-                if (Unsafe.IsNullRef(ref key))
-                    key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
-                if (comparer.Equals(needle, key)) {
-                    matchIndexInBucket = indexInBucket;
-                    return ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
-                }
-            }
-
-            matchIndexInBucket = -1;
-            return ref Unsafe.NullRef<Entry>();
         }
 #pragma warning restore CS8619
 
-        // FIXME: Split this method into two versions, one for vt-with-default-comparer and one for the slow path
-        // Doing that will prune out the vt path entirely for reftype keys and also produce smaller code for fast path
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ref Entry FindKey (K key) {
+            var comparer = Comparer;
+            if (typeof(K).IsValueType && (comparer == null))
+                return ref FindKey<DefaultComparerKeySearcher>(key, null);
+            else
+                return ref FindKey<ComparerKeySearcher>(key, comparer);
+        }
+
+        // Performance is much worse unless this method is inlined, I'm not sure why.
+        // If we disable inlining for it, our generated code size is roughly halved.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal ref Entry FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+            where TKeySearcher : IKeySearcher 
+        {
             // If count is 0 our buckets/entries might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
             //  so we need to bail out early for an empty collection.
             if (_Count == 0)
                 return ref Unsafe.NullRef<Entry>();
 
-            var comparer = Comparer;
-            var hashCode = GetHashCode(comparer, key);
+            var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
             var buckets = (Span<Bucket>)_Buckets;
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
@@ -409,78 +446,58 @@ namespace SimdDictionary {
             // Intentionally bounds-check this entry index (do we need to, though?)
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
-            // Optimize for VT with default comparer. We need this outer check to pick the right loop, and then an inner check
-            //  to keep ryujit happy
-            if (typeof(K).IsValueType && (comparer == null)) {
-                // Separate loop and separate find function to avoid the comparer null check per-bucket (yes, it seems to matter)
-                do {
-                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                    // Using a cmov to conditionally perform the count GetSlot also isn't faster
-                    ref var entry = ref FindKeyInBucketWithDefaultComparer(ref bucket, ref firstBucketEntry, startIndex, key, out _);
-                    if (Unsafe.IsNullRef(ref entry)) {
-                        if (bucket.GetSlot(CascadeSlot) == 0)
-                            return ref Unsafe.NullRef<Entry>();
-                    } else
-                        return ref entry;
+            do {
+                int startIndex = FindSuffixInBucket(ref bucket, suffix);
+                // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
+                // Using a cmov to conditionally perform the count GetSlot also isn't faster
+                ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
+                if (Unsafe.IsNullRef(ref entry)) {
+                    if (bucket.GetSlot(CascadeSlot) == 0)
+                        return ref Unsafe.NullRef<Entry>();
+                } else
+                    return ref entry;
 
-                    // We're checking multiple buckets, so initialize the loop control variables
-                    if (Unsafe.IsNullRef(ref initialBucket)) {
-                        initialBucket = ref bucket;
-                        lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
-                    }
+                // We're checking multiple buckets, so initialize the loop control variables
+                if (Unsafe.IsNullRef(ref initialBucket)) {
+                    initialBucket = ref bucket;
+                    lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
+                }
 
-                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
-                        //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
-                        // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
-                        bucket = ref MemoryMarshal.GetReference(buckets);
-                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
-                    } else {
-                        bucket = ref Unsafe.Add(ref bucket, 1);
-                        firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
-                    }
-                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
-            } else {
-                Debug.Assert(comparer != null);
-                do {
-                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    ref var entry = ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out _);
-                    if (Unsafe.IsNullRef(ref entry)) {
-                        if (bucket.GetSlot(CascadeSlot) == 0)
-                            return ref Unsafe.NullRef<Entry>();
-                    } else
-                        return ref entry;
-
-                    // We're checking multiple buckets, so initialize the loop control variables
-                    if (Unsafe.IsNullRef(ref initialBucket)) {
-                        initialBucket = ref bucket;
-                        lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
-                    }
-
-                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref MemoryMarshal.GetReference(buckets);
-                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
-                    } else {
-                        bucket = ref Unsafe.Add(ref bucket, 1);
-                        firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
-                    }
-                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
-            }
+                if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                    // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
+                    //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
+                    // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
+                    bucket = ref MemoryMarshal.GetReference(buckets);
+                    firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+                } else {
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                    firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
+                }
+            } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
             return ref Unsafe.NullRef<Entry>();
         }
 
-        // Inlining required for disasmo
+        // public for Disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        // Public for disasmo
         public InsertResult TryInsert (K key, V value, InsertMode mode) {
+            var comparer = Comparer;
+            if (typeof(K).IsValueType && (comparer == null))
+                return TryInsert<DefaultComparerKeySearcher>(key, value, mode, null);
+            else
+                return TryInsert<ComparerKeySearcher>(key, value, mode, comparer);
+        }
+
+        // Inlining required for acceptable codegen
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
+            where TKeySearcher : IKeySearcher 
+        {
             // FIXME: Load factor
             if (_Count >= _GrowAtCount)
                 return InsertResult.NeedToGrow;
 
-            var comparer = Comparer;
-            var hashCode = GetHashCode(comparer, key);
+            var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
@@ -494,9 +511,7 @@ namespace SimdDictionary {
             do {
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    ref Entry entry = ref (typeof(K).IsValueType && (comparer == null))
-                            ? ref FindKeyInBucketWithDefaultComparer(ref bucket, ref firstBucketEntry, startIndex, key, out _)
-                            : ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out _);
+                    ref Entry entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
 
                     if (!Unsafe.IsNullRef(ref entry)) {
                         if (mode == InsertMode.EnsureUnique)
@@ -662,13 +677,23 @@ namespace SimdDictionary {
 
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        // Unsafe for sizeof
-        public unsafe bool Remove (K key) {
+        public bool Remove (K key) {
+            var comparer = Comparer;
+            if (typeof(K).IsValueType && (comparer == null))
+                return Remove<DefaultComparerKeySearcher>(key, null);
+            else
+                return Remove<ComparerKeySearcher>(key, comparer);
+        }
+
+        // Inlining required for acceptable codegen
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool Remove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+            where TKeySearcher : IKeySearcher
+        {
             if (_Count <= 0)
                 return false;
 
-            var comparer = Comparer;
-            var hashCode = GetHashCode(comparer, key);
+            var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
@@ -684,10 +709,7 @@ namespace SimdDictionary {
                 int startIndex = FindSuffixInBucket(ref bucket, suffix),
                     indexInBucket;
 
-                ref var entry = ref 
-                    (typeof(K).IsValueType && (comparer == null))
-                        ? ref FindKeyInBucketWithDefaultComparer(ref bucket, ref firstBucketEntry, startIndex, key, out indexInBucket)
-                        : ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer!, key, out indexInBucket);
+                ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref entry)) {
                     Debug.Assert(bucketCount > 0);
@@ -729,7 +751,8 @@ namespace SimdDictionary {
                         if (cascadeCount == 0)
                             Environment.FailFast("Corrupted dictionary bucket cascade slot");
                         // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
-                        //  so it's no longer safe to decrement. This is a very rare scenario.
+                        //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
+                        // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
                         else if (cascadeCount < 255)
                             bucket.SetSlot(CascadeSlot, (byte)(cascadeCount - 1));
                     }
