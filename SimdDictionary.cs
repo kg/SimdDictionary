@@ -4,7 +4,7 @@
 //  higher collision resistance due to improving the quality of suffixes
 // #define PRIME_BUCKET_COUNTS
 // Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
-#define PERMUTE_HASH_CODES
+// #define PERMUTE_HASH_CODES
 // Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
 // #define FORCE_SCALAR_IMPLEMENTATION
 
@@ -45,13 +45,14 @@ namespace SimdDictionary {
             public readonly byte GetSlot (int index) {
                 Debug.Assert(index < Vector128<byte>.Count);
                 // the extract-lane opcode this generates is slower than doing a byte load from memory,
-                //  even if we already have the bucket in a register. not sure why.
+                //  even if we already have the bucket in a register. Not sure why, but my guess based on agner's
+                //  instruction tables is that it's because lane extract generates more uops than a byte move.
+                // the two operations have the same latency on icelake, and the byte move's latency is lower on zen4
                 // return self[index];
                 // index &= 15;
                 return Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), index);
             }
 
-            // Use when modifying one or two slots, to avoid a whole-vector-load-then-store
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void SetSlot (nuint index, byte value) {
                 Debug.Assert(index < (nuint)Vector128<byte>.Count);
@@ -341,6 +342,7 @@ namespace SimdDictionary {
                     // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                     ref var key = ref Unsafe.NullRef<K>();
                     for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
+                        // It might be good to find a way to compile this down to a cmov instead of the current branch
                         if (Unsafe.IsNullRef(ref key))
                             key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
                         if (EqualityComparer<K>.Default.Equals(needle, key)) {
@@ -360,6 +362,8 @@ namespace SimdDictionary {
         internal struct ComparerKeySearcher : IKeySearcher {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
+                return 0;
+
                 return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
             }
 
@@ -369,6 +373,9 @@ namespace SimdDictionary {
                 [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
                 int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
+                matchIndexInBucket = -1;
+                return ref Unsafe.NullRef<Entry>();
+
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
@@ -490,28 +497,77 @@ namespace SimdDictionary {
                 return TryInsert<ComparerKeySearcher>(key, value, mode, comparer);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryInsertIntoBucket (ref Bucket bucket, ref Entry firstBucketEntry, byte suffix, K key, V value) {
+            byte bucketCount = bucket.GetSlot(CountSlot);
+            if (bucketCount >= BucketSizeU)
+                return false;
+
+            unchecked {
+                ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), bucketCount);
+                ref var entry = ref Unsafe.Add(ref firstBucketEntry, bucketCount);
+                bucket.SetSlot(CountSlot, (byte)(bucketCount + 1));
+                bucket.SetSlot(bucketCount, suffix);
+                newKey = key;
+                entry = new Entry(value);
+            }
+
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void AdjustCascadeCounts (
+            Span<Bucket> buckets, ref Bucket bucket, ref Bucket initialBucket, ref Bucket lastBucket,
+            bool increase
+        ) {
+            ref var firstBucket = ref MemoryMarshal.GetReference(buckets);
+            // We may have cascaded out of a previous bucket; if so, scan backwards and update
+            //  the cascade count for every bucket we previously scanned.
+            while (!Unsafe.AreSame(ref bucket, ref initialBucket)) {
+                // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
+                bucket = ref Unsafe.Subtract(ref bucket, 1);
+                if (Unsafe.IsAddressLessThan(ref bucket, ref firstBucket))
+                    bucket = ref lastBucket;
+
+                var cascadeCount = bucket.GetSlot(CascadeSlot);
+                if (increase) {
+                    if (cascadeCount < 255)
+                        bucket.SetSlot(CascadeSlot, (byte)(cascadeCount + 1));
+                } else {
+                    throw new NotImplementedException();
+                }
+            }
+        }
+
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : IKeySearcher 
         {
+            // This duplicates a lot of logic from FindValue, so I won't replicate its comments here. See FindValue for more info.
+            // FIXME: Find a way to code-share most of the control logic between findvalue/tryinsert/tryremove
+
             if (_Count >= _GrowAtCount)
                 return InsertResult.NeedToGrow;
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var suffix = GetHashSuffix(hashCode);
+
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
-            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
-            var bucketIndex = initialBucketIndex;
-            ref var bucket = ref buckets[initialBucketIndex];
+            var suffix = GetHashSuffix(hashCode);
+
+            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+
+            ref Bucket lastBucket = ref Unsafe.NullRef<Bucket>(),
+                initialBucket = ref Unsafe.NullRef<Bucket>(),
+                bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    ref Entry entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
+                    ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
 
                     if (!Unsafe.IsNullRef(ref entry)) {
                         if (mode == InsertMode.EnsureUnique)
@@ -525,43 +581,32 @@ namespace SimdDictionary {
                     }
                 }
 
-                byte bucketCount = bucket.GetSlot(CountSlot);
-                if (bucketCount < BucketSizeU) {
-                    unchecked {
-                        ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), bucketCount);
-                        ref var entry = ref Unsafe.Add(ref firstBucketEntry, bucketCount);
-                        bucket.SetSlot(CountSlot, (byte)(bucketCount + 1));
-                        bucket.SetSlot(bucketCount, suffix);
-                        newKey = key;
-                        entry = new Entry(value);
-                    }
-
-                    // We may have cascaded out of a previous bucket; if so, scan backwards and update
-                    //  the cascade count for every bucket we previously scanned.
-                    while (bucketIndex != initialBucketIndex) {
-                        // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
-                        bucketIndex--;
-                        if (bucketIndex < 0)
-                            bucketIndex = buckets.Length - 1;
-                        bucket = ref buckets[bucketIndex];
-                        var cascadeCount = bucket.GetSlot(CascadeSlot);
-                        if (cascadeCount < 255)
-                            bucket.SetSlot(CascadeSlot, (byte)(cascadeCount + 1));
-                    }
+                if (TryInsertIntoBucket(ref bucket, ref firstBucketEntry, suffix, key, value)) {
+                    // If the loop control variables are populated, that means we had to try to insert into multiple buckets.
+                    // Increase the cascade counters for the buckets we checked before this one.
+                    if (!Unsafe.IsNullRef(ref initialBucket))
+                        AdjustCascadeCounts(buckets, ref bucket, ref initialBucket, ref lastBucket, true);
 
                     return InsertResult.OkAddedNew;
                 }
 
-                bucketIndex++;
-                if (bucketIndex >= buckets.Length) {
-                    bucketIndex = 0;
+                // We're checking multiple buckets, so initialize the loop control variables
+                if (Unsafe.IsNullRef(ref initialBucket)) {
+                    initialBucket = ref bucket;
+                    lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
+                }
+
+                if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                    // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
+                    //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
+                    // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
                     bucket = ref MemoryMarshal.GetReference(buckets);
                     firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                 } else {
                     bucket = ref Unsafe.Add(ref bucket, 1);
                     firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
                 }
-            } while (bucketIndex != initialBucketIndex);
+            } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
             // FIXME: This shouldn't be possible
             return InsertResult.NeedToGrow;
