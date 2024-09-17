@@ -612,6 +612,108 @@ namespace SimdDictionary {
             return InsertResult.NeedToGrow;
         }
 
+        // Inlining required for disasmo
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool Remove (K key) {
+            var comparer = Comparer;
+            if (typeof(K).IsValueType && (comparer == null))
+                return Remove<DefaultComparerKeySearcher>(key, null);
+            else
+                return Remove<ComparerKeySearcher>(key, comparer);
+        }
+
+        // Inlining required for acceptable codegen
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool Remove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+            where TKeySearcher : IKeySearcher
+        {
+            if (_Count <= 0)
+                return false;
+
+            var hashCode = TKeySearcher.GetHashCode(comparer, key);
+            var suffix = GetHashSuffix(hashCode);
+            var buckets = (Span<Bucket>)_Buckets;
+            var entries = (Span<Entry>)_Entries;
+            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
+            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
+            var bucketIndex = initialBucketIndex;
+            // var searchVector = Vector128.Create(suffix);
+            ref var bucket = ref buckets[initialBucketIndex];
+            ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
+
+            do {
+                byte bucketCount = bucket.GetSlot(CountSlot);
+                int startIndex = FindSuffixInBucket(ref bucket, suffix),
+                    indexInBucket;
+
+                ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out indexInBucket);
+
+                if (!Unsafe.IsNullRef(ref entry)) {
+                    Debug.Assert(bucketCount > 0);
+
+                    unchecked {
+                        ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
+                        int replacementIndexInBucket = bucketCount - 1;
+                        bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
+                        if (indexInBucket != replacementIndexInBucket) {
+                            bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
+                            bucket.SetSlot((uint)replacementIndexInBucket, 0);
+                            ref var replacementKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), replacementIndexInBucket);
+                            ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
+                            entry = replacementEntry;
+                            newKey = replacementKey;
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                                replacementKey = default!;
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                                replacementEntry = default;
+                        } else {
+                            bucket.SetSlot((uint)indexInBucket, 0);
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                                newKey = default!;
+                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                                entry = default;
+                        }
+                        _Count--;
+                    }
+
+                    // We may have cascaded out of a previous bucket; if so, scan backwards and update
+                    //  the cascade count for every bucket we previously scanned.
+                    while (bucketIndex != initialBucketIndex) {
+                        bucketIndex--;
+                        if (bucketIndex < 0)
+                            bucketIndex = buckets.Length - 1;
+                        bucket = ref buckets[bucketIndex];
+
+                        var cascadeCount = bucket.GetSlot(CascadeSlot);
+                        if (cascadeCount == 0)
+                            Environment.FailFast("Corrupted dictionary bucket cascade slot");
+                        // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
+                        //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
+                        // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
+                        else if (cascadeCount < 255)
+                            bucket.SetSlot(CascadeSlot, (byte)(cascadeCount - 1));
+                    }
+
+                    return true;
+                }
+
+                if (bucket.GetSlot(CascadeSlot) == 0)
+                    return false;
+
+                bucketIndex++;
+                if (bucketIndex >= buckets.Length) {
+                    bucketIndex = 0;
+                    bucket = ref MemoryMarshal.GetReference(buckets);
+                    firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+                } else {
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                    firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
+                }
+            } while (bucketIndex != initialBucketIndex);
+
+            return false;
+        }
+
         public V this[K key] { 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
@@ -719,108 +821,6 @@ namespace SimdDictionary {
 
         IEnumerator IEnumerable.GetEnumerator () =>
             GetEnumerator();
-
-        // Inlining required for disasmo
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool Remove (K key) {
-            var comparer = Comparer;
-            if (typeof(K).IsValueType && (comparer == null))
-                return Remove<DefaultComparerKeySearcher>(key, null);
-            else
-                return Remove<ComparerKeySearcher>(key, comparer);
-        }
-
-        // Inlining required for acceptable codegen
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool Remove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
-            where TKeySearcher : IKeySearcher
-        {
-            if (_Count <= 0)
-                return false;
-
-            var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var suffix = GetHashSuffix(hashCode);
-            var buckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Entry>)_Entries;
-            Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
-            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
-            var bucketIndex = initialBucketIndex;
-            // var searchVector = Vector128.Create(suffix);
-            ref var bucket = ref buckets[initialBucketIndex];
-            ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
-
-            do {
-                byte bucketCount = bucket.GetSlot(CountSlot);
-                int startIndex = FindSuffixInBucket(ref bucket, suffix),
-                    indexInBucket;
-
-                ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out indexInBucket);
-
-                if (!Unsafe.IsNullRef(ref entry)) {
-                    Debug.Assert(bucketCount > 0);
-
-                    unchecked {
-                        ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
-                        int replacementIndexInBucket = bucketCount - 1;
-                        bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
-                        if (indexInBucket != replacementIndexInBucket) {
-                            bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
-                            bucket.SetSlot((uint)replacementIndexInBucket, 0);
-                            ref var replacementKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), replacementIndexInBucket);
-                            ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
-                            entry = replacementEntry;
-                            newKey = replacementKey;
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
-                                replacementKey = default!;
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                                replacementEntry = default;
-                        } else {
-                            bucket.SetSlot((uint)indexInBucket, 0);
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
-                                newKey = default!;
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                                entry = default;
-                        }
-                        _Count--;
-                    }
-
-                    // We may have cascaded out of a previous bucket; if so, scan backwards and update
-                    //  the cascade count for every bucket we previously scanned.
-                    while (bucketIndex != initialBucketIndex) {
-                        bucketIndex--;
-                        if (bucketIndex < 0)
-                            bucketIndex = buckets.Length - 1;
-                        bucket = ref buckets[bucketIndex];
-
-                        var cascadeCount = bucket.GetSlot(CascadeSlot);
-                        if (cascadeCount == 0)
-                            Environment.FailFast("Corrupted dictionary bucket cascade slot");
-                        // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
-                        //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
-                        // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
-                        else if (cascadeCount < 255)
-                            bucket.SetSlot(CascadeSlot, (byte)(cascadeCount - 1));
-                    }
-
-                    return true;
-                }
-
-                if (bucket.GetSlot(CascadeSlot) == 0)
-                    return false;
-
-                bucketIndex++;
-                if (bucketIndex >= buckets.Length) {
-                    bucketIndex = 0;
-                    bucket = ref MemoryMarshal.GetReference(buckets);
-                    firstBucketEntry = ref MemoryMarshal.GetReference(entries);
-                } else {
-                    bucket = ref Unsafe.Add(ref bucket, 1);
-                    firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
-                }
-            } while (bucketIndex != initialBucketIndex);
-
-            return false;
-        }
 
         bool ICollection<KeyValuePair<K, V>>.Remove (KeyValuePair<K, V> item) =>
             // FIXME: Check value
