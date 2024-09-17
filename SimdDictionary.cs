@@ -617,14 +617,43 @@ namespace SimdDictionary {
         public bool Remove (K key) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
-                return Remove<DefaultComparerKeySearcher>(key, null);
+                return TryRemove<DefaultComparerKeySearcher>(key, null);
             else
-                return Remove<ComparerKeySearcher>(key, comparer);
+                return TryRemove<ComparerKeySearcher>(key, comparer);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, ref Entry entry, ref Entry firstBucketEntry) {
+            var bucketCount = bucket.GetSlot(CountSlot);
+            Debug.Assert(bucketCount > 0);
+            unchecked {
+                ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
+                int replacementIndexInBucket = bucketCount - 1;
+                bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
+                if (indexInBucket != replacementIndexInBucket) {
+                    bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
+                    bucket.SetSlot((uint)replacementIndexInBucket, 0);
+                    ref var replacementKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), replacementIndexInBucket);
+                    ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
+                    entry = replacementEntry;
+                    newKey = replacementKey;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                        replacementKey = default!;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                        replacementEntry = default;
+                } else {
+                    bucket.SetSlot((uint)indexInBucket, 0);
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                        newKey = default!;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                        entry = default;
+                }
+            }
         }
 
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool Remove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        internal bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : IKeySearcher
         {
             if (_Count <= 0)
@@ -651,30 +680,8 @@ namespace SimdDictionary {
                 if (!Unsafe.IsNullRef(ref entry)) {
                     Debug.Assert(bucketCount > 0);
 
-                    unchecked {
-                        ref var newKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
-                        int replacementIndexInBucket = bucketCount - 1;
-                        bucket.SetSlot(CountSlot, (byte)replacementIndexInBucket);
-                        if (indexInBucket != replacementIndexInBucket) {
-                            bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
-                            bucket.SetSlot((uint)replacementIndexInBucket, 0);
-                            ref var replacementKey = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), replacementIndexInBucket);
-                            ref var replacementEntry = ref Unsafe.Add(ref firstBucketEntry, replacementIndexInBucket);
-                            entry = replacementEntry;
-                            newKey = replacementKey;
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
-                                replacementKey = default!;
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                                replacementEntry = default;
-                        } else {
-                            bucket.SetSlot((uint)indexInBucket, 0);
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
-                                newKey = default!;
-                            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                                entry = default;
-                        }
-                        _Count--;
-                    }
+                    _Count--;
+                    RemoveFromBucket(ref bucket, indexInBucket, ref entry, ref firstBucketEntry);
 
                     // We may have cascaded out of a previous bucket; if so, scan backwards and update
                     //  the cascade count for every bucket we previously scanned.
