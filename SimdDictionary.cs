@@ -175,7 +175,8 @@ namespace SimdDictionary {
 
             // Allocate both new arrays before updating the fields so that we don't get corrupted
             //  when running out of memory
-            var newEntries = new Entry[actualCapacity];
+            // HACK: Allocate an extra entry slot at the end so that we can safely do a trick when scanning keys
+            var newEntries = new Entry[actualCapacity + 1];
             var newBuckets = new Bucket[bucketCount];
             Thread.MemoryBarrier();
             // Ensure that when growing we store the new bigger entries array before storing the new
@@ -280,25 +281,30 @@ namespace SimdDictionary {
             Debug.Assert(indexInBucket >= 0);
             Debug.Assert(count <= BucketSizeI);
 
+            // It might be faster on some targets to early-out before the address computation(s) below
+            //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
+            //  and this implementation generates much smaller code
+            /*
+            if (indexInBucket >= count)
+                return ref Unsafe.NullRef<Entry>();
+            */
+
             // We need to duplicate the loop header logic and move it inside the if, otherwise
             //  count gets spilled to the stack.
             if (typeof(K).IsValueType) {
                 // We do this instead of a for-loop so we can skip ReadKey when there's no match,
                 //  which improves performance for missing items and/or hash collisions
-                if (indexInBucket >= count)
-                    return ref Unsafe.NullRef<Entry>();
-
+                // FIXME: Can we fuse this with the while loop termination condition somehow?
                 // Comparing entry directly against lastEntry produces smaller code than doing
                 //  indexInBucket++ <= count in the loop
                 ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
-                    lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count - 1);
-                do {
+                // HACK: We ensure this is safe by allocating space for exactly one additional entry at the end of the entries array
+                    lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
+                while (Unsafe.IsAddressLessThan(ref entry, ref lastEntry)) {
                     if (EqualityComparer<K>.Default.Equals(needle, entry.Key))
                         return ref entry;
-                    if (Unsafe.AreSame(ref entry, ref lastEntry))
-                        break;
                     entry = ref Unsafe.Add(ref entry, 1);
-                } while (true);
+                }
             } else {
                 Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
             }
@@ -312,26 +318,28 @@ namespace SimdDictionary {
             Debug.Assert(count <= BucketSizeI);
             Debug.Assert(comparer != null);
 
-            // We do this instead of a for-loop so we can skip ReadKey when there's no match,
-            //  which improves performance for missing items and/or hash collisions
+            // It might be faster on some targets to early-out before the address computation(s) below
+            //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
+            //  and this implementation generates much smaller code
+            /*
             if (indexInBucket >= count)
                 return ref Unsafe.NullRef<Entry>();
+            */
 
             // FIXME: Load comparer field on-demand here to optimize the 'no match' case?
             // Comparing entry directly against lastEntry produces smaller code than doing
             //  indexInBucket++ <= count in the loop
             ref Entry entry = ref Unsafe.Add(ref firstEntryInBucket, indexInBucket),
-                lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count - 1);
-            do {
+            // HACK: We ensure this is safe by allocating space for exactly one additional entry at the end of the entries array
+                lastEntry = ref Unsafe.Add(ref firstEntryInBucket, count);
+            while (Unsafe.IsAddressLessThan(ref entry, ref lastEntry)) {
                 // FIXME: SCG.Dictionary does a hashcode comparison first, but we don't store the hashcode in the entry.
                 // For expensive comparers, it might be necessary to do this. But the suffix encodes 8 bits of the hash, and
                 //  the bucket index encodes another few bits as well, so it is less necessary than it is in SCG.Dictionary
                 if (comparer.Equals(needle, entry.Key))
                     return ref entry;
-                if (Unsafe.AreSame(ref entry, ref lastEntry))
-                    break;
                 entry = ref Unsafe.Add(ref entry, 1);
-            } while (true);
+            }
 
             return ref Unsafe.NullRef<Entry>();
         }
