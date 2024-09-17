@@ -29,7 +29,7 @@ namespace SimdDictionary {
         where K : notnull
     {
         // This size must match BucketSizeI/U
-        [InlineArray(8)]
+        [InlineArray(14)]
         internal struct InlineKeyArray {
             public K Key0;
         }
@@ -86,16 +86,11 @@ namespace SimdDictionary {
             //  to maintain an ideal load factor. FIXME: 120 isn't right
             OversizePercentage = 120,
             // TODO: A BucketSize of 8 would waste 4 slots in every bucket, but would turn some imuls into shifts
-            BucketSizeI = 8,
+            BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;
 
-        public const uint
-            // We need to make sure suffixes are never zero, and it's
-            //  more likely that a bad hash will collide at the top bit
-            //  than at the bottom (i.e. using an int/ptr as its own hash)
-            SuffixSalt = 0b10000000,
-            BucketSizeU = 8;
+        public const uint BucketSizeU = 14;
 
 #if PRIME_BUCKET_COUNTS
         private ulong _fastModMultiplier;
@@ -370,9 +365,9 @@ namespace SimdDictionary {
         }
 #pragma warning restore CS8619
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         // FIXME: Split this method into two versions, one for vt-with-default-comparer and one for the slow path
         // Doing that will prune out the vt path entirely for reftype keys and also produce smaller code for fast path
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ref Entry FindKey (K key) {
             // If count is 0 our buckets/entries might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
             //  so we need to bail out early for an empty collection.
@@ -395,22 +390,22 @@ namespace SimdDictionary {
             //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the method
             //  calls for the comparer, etc, and the problem is that the vector has to live across method calls so it picks a nvreg.
             var suffix = GetHashSuffix(hashCode);
-            // FIXME: RyuJIT cannot 'see through' FindSuffixInBucket even though it's inlined, so it ends up assigning
-            //  searchVector to xmm6, which requires the jitcode to preserve xmm6's previous value on entry and restore
-            //  it on exit, wasting valuable memory bandwidth. So we have to construct it on-demand instead. :(
+            // RyuJIT will assign this to xmm6 (a nonvolatile register) because of the potential for this method to call other
+            //  methods, which requires the existing value of xmm6 to spill to the stack upon method entry. As such, it's better
+            //  to construct the search vector on every call to FindSuffixInBucket instead. This trades improved performance on
+            //  the common case (single-bucket search and then return) for slightly worse performance when cascaded
             // var searchVector = Vector128.Create(suffix);
 
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
 
-            // Capture the buckets span into three refs instead so the span can go out of scope and we can do everything
-            //  inside the loop via raw address comparisons instead
-            ref Bucket bucketZero = ref MemoryMarshal.GetReference(buckets),
+            // Null-initialize these refs and then initialize them on demand only if we have to check multiple buckets.
+            // This increases code size a bit, but moves a bunch of code off of the hot path.
+            ref Bucket lastBucket = ref Unsafe.NullRef<Bucket>(),
+                initialBucket = ref Unsafe.NullRef<Bucket>(),
                 // We can use Unsafe.Add here because we know these two indices are already within bounds;
                 //  the first is calculated by BucketIndexForHashCode (either masked with & or modulus),
                 //  and the second is buckets.Length - 1, so it can never be out of range.
-                initialBucket = ref Unsafe.Add(ref bucketZero, initialBucketIndex),
-                lastBucket = ref Unsafe.Add(ref bucketZero, buckets.Length - 1),
-                bucket = ref initialBucket;
+                bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
             // Intentionally bounds-check this entry index (do we need to, though?)
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
@@ -429,11 +424,17 @@ namespace SimdDictionary {
                     } else
                         return ref entry;
 
+                    // We're checking multiple buckets, so initialize the loop control variables
+                    if (Unsafe.IsNullRef(ref initialBucket)) {
+                        initialBucket = ref bucket;
+                        lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
+                    }
+
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
                         // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
                         //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
                         // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
-                        bucket = ref bucketZero;
+                        bucket = ref MemoryMarshal.GetReference(buckets);
                         firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
@@ -451,8 +452,14 @@ namespace SimdDictionary {
                     } else
                         return ref entry;
 
+                    // We're checking multiple buckets, so initialize the loop control variables
+                    if (Unsafe.IsNullRef(ref initialBucket)) {
+                        initialBucket = ref bucket;
+                        lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
+                    }
+
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref bucketZero;
+                        bucket = ref MemoryMarshal.GetReference(buckets);
                         firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
