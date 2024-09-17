@@ -365,8 +365,8 @@ namespace SimdDictionary {
             // Unfortunately this eats a valuable register and as a result something gets spilled to the stack :( Still probably
             //  better than having to save/restore xmm6 every time, though.
             // I tested storing the suffix in a Vector128 to try and use a vector register, but RyuJIT assigns it to xmm6. Not sure
-            //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the inlined
-            //  method calls for the comparer, etc, and the problem is that the vector has to live across method calls.
+            //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the method
+            //  calls for the comparer, etc, and the problem is that the vector has to live across method calls so it picks a nvreg.
             var suffix = GetHashSuffix(hashCode);
 
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
@@ -374,8 +374,12 @@ namespace SimdDictionary {
             // FIXME: There are two range checks here for buckets, first initialBucketIndex and then buckets.Length - 1.
             // We know by definition that buckets.Length - 1 can't fail the range check as long as the bucket count is more than 0,
             //  and we always allocate at least one bucket. So we can probably optimize the range check out somehow.
-            ref Bucket initialBucket = ref buckets[initialBucketIndex],
-                lastBucket = ref buckets[buckets.Length - 1],
+            ref Bucket bucketZero = ref MemoryMarshal.GetReference(buckets),
+                // We can use Unsafe.Add here because we know these two indices are already within bounds;
+                //  the first is calculated by BucketIndexForHashCode (either masked with & or modulus),
+                //  and the second is buckets.Length - 1, so it can never be out of range.
+                initialBucket = ref Unsafe.Add(ref bucketZero, initialBucketIndex),
+                lastBucket = ref Unsafe.Add(ref bucketZero, buckets.Length - 1),
                 bucket = ref initialBucket;
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
@@ -397,7 +401,10 @@ namespace SimdDictionary {
                         return ref entry;
 
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref MemoryMarshal.GetReference(buckets);
+                        // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
+                        //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
+                        // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
+                        bucket = ref bucketZero;
                         firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
@@ -418,7 +425,7 @@ namespace SimdDictionary {
                         return ref entry;
 
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref MemoryMarshal.GetReference(buckets);
+                        bucket = ref bucketZero;
                         firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
