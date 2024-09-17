@@ -18,6 +18,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
+using System.Runtime.Intrinsics.Wasm;
 using Bucket = System.Runtime.Intrinsics.Vector128<byte>;
 
 namespace SimdDictionary {
@@ -249,11 +250,16 @@ namespace SimdDictionary {
                 return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
-                var matchVector = AdvSimd.CompareEqual(searchVector, bucket);
-                var masked = AdvSimd.And(matchVector, Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128));
-                var bits = AdvSimd.Arm64.AddAcross(masked.GetLower()).ToScalar() |
-                    (AdvSimd.Arm64.AddAcross(masked.GetUpper()).ToScalar() << 8);
-                return BitOperations.TrailingZeroCount(bits);
+                var laneBits = AdvSimd.And(
+                    AdvSimd.CompareEqual(searchVector, bucket), 
+                    Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128)
+                );
+                var moveMask = AdvSimd.Arm64.AddAcross(laneBits.GetLower()).ToScalar() |
+                    (AdvSimd.Arm64.AddAcross(laneBits.GetUpper()).ToScalar() << 8);
+                return BitOperations.TrailingZeroCount(moveMask);
+            } else if (PackedSimd.IsSupported) {
+                // Completely untested
+                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(searchVector, bucket)));
             } else {
 #else
             {
