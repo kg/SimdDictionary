@@ -255,7 +255,6 @@ namespace SimdDictionary {
         internal static byte GetHashSuffix (uint hashCode) {
             // The bottom bits of the hash form the bucket index, so we
             //  use the top bits of the hash as a suffix
-            // var result = unchecked((byte)((hashCode >> 24) | SuffixSalt));
             var result = unchecked((byte)(hashCode >> 24));
             // Assuming the JIT turns this into a cmov, this should be better on average
             //  since it nearly doubles the number of possible suffixes, improving collision
@@ -271,10 +270,13 @@ namespace SimdDictionary {
             unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
 #endif
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static unsafe int FindSuffixInBucket (ref Bucket bucket, byte suffix) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
+                // FIXME: It would be nice to precompute the search vector outside of the loop, to hide the latency of vpbroadcastb.
+                // Right now if we do that, ryujit places the search vector in xmm6 which forces stack spills, and that's worse.
+                // So we have to compute it on-demand here. On modern x86-64 chips the latency of vpbroadcastb is 1, at least.
                 return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket.Suffixes)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
@@ -315,6 +317,7 @@ namespace SimdDictionary {
             static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
         }
 
+        // These have to be structs so that the JIT will specialize callers instead of Canonizing them
         internal struct DefaultComparerKeySearcher : IKeySearcher {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -334,7 +337,6 @@ namespace SimdDictionary {
                 // It might be faster on some targets to early-out before the address computation(s) below
                 //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
                 //  and this implementation generates smaller code
-
                 if (typeof(K).IsValueType) {
                     // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                     ref var key = ref Unsafe.NullRef<K>();
@@ -493,7 +495,6 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : IKeySearcher 
         {
-            // FIXME: Load factor
             if (_Count >= _GrowAtCount)
                 return InsertResult.NeedToGrow;
 
@@ -504,7 +505,6 @@ namespace SimdDictionary {
             Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var bucketIndex = initialBucketIndex;
-            // var searchVector = Vector128.Create(suffix);
             ref var bucket = ref buckets[initialBucketIndex];
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
