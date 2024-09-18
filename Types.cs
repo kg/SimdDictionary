@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -21,19 +22,29 @@ namespace SimdDictionary {
             CascadeSlot = 15;
 
         public const uint BucketSizeU = 14;
+
+        internal struct Pair {
+            public K Key;
+            public V Value;
+        }
         
         // This size must match BucketSizeI/U
         // A size of 4 or 8 would turn some imuls into shifts, but the impact of that seems small compared
         //  to the wasted memory
         [InlineArray(14)]
-        internal struct InlineKeyArray {
-            public K Key0;
+        internal struct InlinePairArray {
+            public Pair Pair0;
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 16)]
         internal struct Bucket {
             public Vector128<byte> Suffixes;
-            public InlineKeyArray Keys;
+            public InlinePairArray Pairs;
+
+            public ref byte Count {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => ref Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), CountSlot);
+            }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public readonly byte GetSlot (int index) {
@@ -81,10 +92,10 @@ namespace SimdDictionary {
         // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
         //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
         internal interface IKeySearcher {
-            static abstract ref V FindKeyInBucket (
-                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref V firstEntryInBucket,
-                int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+            static abstract ref Pair FindKeyInBucket (
+                // We have to use UnscopedRef to allow lazy initialization
+                [UnscopedRef] ref Bucket bucket, int startIndexInBucket, 
+                IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             );
 
             static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
@@ -93,7 +104,7 @@ namespace SimdDictionary {
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
         internal interface IBucketCallback {
             // Return false to stop iteration
-            abstract bool Bucket (ref Bucket bucket, Span<V> values);
+            abstract bool Bucket (ref Bucket bucket);
         }
     }
 }

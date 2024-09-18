@@ -32,54 +32,50 @@ namespace SimdDictionary
 
             public V this [TAlternateKey key] {
                 get {
-                    ref V value = ref FindKey(key);
-                    if (Unsafe.IsNullRef(ref value))
+                    ref var pair = ref FindKey(key);
+                    if (Unsafe.IsNullRef(ref pair))
                         throw new KeyNotFoundException($"Key {key} not found");
-                    return value;
+                    return pair.Value;
                 }
             }
 
             public bool TryGetValue (TAlternateKey key, out V value) {
-                ref var entry = ref FindKey(key);
-                if (Unsafe.IsNullRef(ref entry)) {
+                ref var pair = ref FindKey(key);
+                if (Unsafe.IsNullRef(ref pair)) {
                     value = default!;
                     return false;
                 } else {
-                    value = entry;
+                    value = pair.Value;
                     return true;
                 }
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal ref V FindKey (TAlternateKey key) {
+            internal ref Pair FindKey (TAlternateKey key) {
                 // This is duplicated from SimdDictionary.FindKey, look there for comments.
                 var dictionary = Dictionary;
                 if (dictionary._Count == 0)
-                    return ref Unsafe.NullRef<V>();
+                    return ref Unsafe.NullRef<Pair>();
 
                 var comparer = Comparer;
                 var hashCode = FinalizeHashCode(unchecked((uint)comparer.GetHashCode(key)));
 
                 var buckets = (Span<Bucket>)dictionary._Buckets;
-                var entries = (Span<V>)dictionary._Entries;
                 var initialBucketIndex = dictionary.BucketIndexForHashCode(hashCode, buckets);
                 var suffix = GetHashSuffix(hashCode);
-
-                Debug.Assert(entries.Length >= buckets.Length * BucketSizeI);
 
                 ref Bucket lastBucket = ref Unsafe.NullRef<Bucket>(),
                     initialBucket = ref Unsafe.NullRef<Bucket>(),
                     bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
-                ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
                 do {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    ref var entry = ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
-                    if (Unsafe.IsNullRef(ref entry)) {
+                    ref var pair = ref FindKeyInBucket(ref bucket, startIndex, comparer, key, out _);
+                    if (Unsafe.IsNullRef(ref pair)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
-                            return ref Unsafe.NullRef<V>();
+                            return ref Unsafe.NullRef<Pair>();
                     } else
-                        return ref entry;
+                        return ref pair;
 
                     if (Unsafe.IsNullRef(ref initialBucket)) {
                         initialBucket = ref bucket;
@@ -88,21 +84,20 @@ namespace SimdDictionary
 
                     if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
                         bucket = ref MemoryMarshal.GetReference(buckets);
-                        firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                     } else {
                         bucket = ref Unsafe.Add(ref bucket, 1);
-                        firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
                     }
                 } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
-                return ref Unsafe.NullRef<V>();
+                return ref Unsafe.NullRef<Pair>();
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal static ref V FindKeyInBucket (
-                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref V firstEntryInBucket, 
-                int indexInBucket, IAlternateComparer<K, TAlternateKey> comparer, TAlternateKey needle, out int matchIndexInBucket
+            internal static ref Pair FindKeyInBucket (
+                // We have to use UnscopedRef to allow lazy initialization
+                [UnscopedRef] ref Bucket bucket,
+                int indexInBucket, IAlternateComparer<K, TAlternateKey> comparer, 
+                TAlternateKey needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
@@ -113,18 +108,18 @@ namespace SimdDictionary
                 //  and this implementation generates smaller code
 
                 // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
-                ref var key = ref Unsafe.NullRef<K>();
-                for (; indexInBucket < count; indexInBucket++, key = ref Unsafe.Add(ref key, 1)) {
-                    if (Unsafe.IsNullRef(ref key))
-                        key = ref Unsafe.Add(ref Unsafe.As<InlineKeyArray, K>(ref bucket.Keys), indexInBucket);
-                    if (comparer!.Equals(key, needle)) {
+                ref var pair = ref Unsafe.NullRef<Pair>();
+                for (; indexInBucket < count; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
+                    if (Unsafe.IsNullRef(ref pair))
+                        pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                    if (comparer!.Equals(pair.Key, needle)) {
                         matchIndexInBucket = indexInBucket;
-                        return ref Unsafe.Add(ref firstEntryInBucket, indexInBucket);
+                        return ref pair;
                     }
                 }
 
                 matchIndexInBucket = -1;
-                return ref Unsafe.NullRef<V>();
+                return ref Unsafe.NullRef<Pair>();
             }
         }
     }
