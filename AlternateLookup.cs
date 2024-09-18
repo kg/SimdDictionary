@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Runtime.Serialization;
 
 namespace SimdDictionary
@@ -72,7 +73,7 @@ namespace SimdDictionary
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     ref var pair = ref FindKeyInBucket(ref bucket, startIndex, comparer, key, out _);
                     if (Unsafe.IsNullRef(ref pair)) {
-                        if (bucket.GetSlot(CascadeSlot) == 0)
+                        if (bucket.CascadeCount == 0)
                             return ref Unsafe.NullRef<Pair>();
                     } else
                         return ref pair;
@@ -102,7 +103,7 @@ namespace SimdDictionary
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                int count = bucket.GetSlot(CountSlot);
+                int count = bucket.Count;
                 // It might be faster on some targets to early-out before the address computation(s) below
                 //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
                 //  and this implementation generates smaller code

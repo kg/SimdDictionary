@@ -46,6 +46,11 @@ namespace SimdDictionary {
                 get => ref Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), CountSlot);
             }
 
+            public ref byte CascadeCount {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => ref Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), CascadeSlot);
+            }
+
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public readonly byte GetSlot (int index) {
                 Debug.Assert(index < Vector128<byte>.Count);

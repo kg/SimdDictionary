@@ -328,11 +328,7 @@ namespace SimdDictionary {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
             var buckets = (Span<Bucket>)_Buckets;
-            // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
-            //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
-            // Unfortunately this eats a valuable register and as a result something gets spilled to the stack :( Still probably
-            //  better than having to save/restore xmm6 every time, though.
             // I tested storing the suffix in a Vector128 to try and use a vector register, but RyuJIT assigns it to xmm6. Not sure
             //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the method
             //  calls for the comparer, etc, and the problem is that the vector has to live across method calls so it picks a nvreg.
@@ -347,9 +343,7 @@ namespace SimdDictionary {
             // This increases code size a bit, but moves a bunch of code off of the hot path.
             ref Bucket lastBucket = ref Unsafe.NullRef<Bucket>(),
                 initialBucket = ref Unsafe.NullRef<Bucket>(),
-                // We can use Unsafe.Add here because we know these two indices are already within bounds;
-                //  the first is calculated by BucketIndexForHashCode (either masked with & or modulus),
-                //  and the second is buckets.Length - 1, so it can never be out of range.
+                // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
                 bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
 
             do {
@@ -358,7 +352,7 @@ namespace SimdDictionary {
                 // Using a cmov to conditionally perform the count GetSlot also isn't faster
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, comparer, key, out _);
                 if (Unsafe.IsNullRef(ref pair)) {
-                    if (bucket.GetSlot(CascadeSlot) == 0)
+                    if (bucket.CascadeCount == 0)
                         return ref Unsafe.NullRef<Pair>();
                 } else
                     return ref pair;
@@ -427,11 +421,11 @@ namespace SimdDictionary {
                 if (Unsafe.IsAddressLessThan(ref bucket, ref firstBucket))
                     bucket = ref lastBucket;
 
-                var cascadeCount = bucket.GetSlot(CascadeSlot);
+                var cascadeCount = bucket.CascadeCount;
                 if (increase) {
                     // Never overflow (wrap around) the counter
                     if (cascadeCount < 255)
-                        bucket.SetSlot(CascadeSlot, (byte)(cascadeCount + 1));
+                        bucket.CascadeCount = (byte)(cascadeCount + 1);
                 } else {
                     if (cascadeCount == 0)
                         Environment.FailFast("Corrupted dictionary bucket cascade slot");
@@ -439,7 +433,7 @@ namespace SimdDictionary {
                     //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
                     // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
                     else if (cascadeCount < 255)
-                        bucket.SetSlot(CascadeSlot, (byte)(cascadeCount - 1));
+                        bucket.CascadeCount = (byte)(cascadeCount - 1);
                 }
             }
         }
@@ -577,7 +571,7 @@ namespace SimdDictionary {
 
                 // Important: If the cascade counter is 0 and we didn't find the item, we don't want to check any other buckets.
                 // Otherwise, we'd scan the whole table fruitlessly looking for a matching key.
-                if (bucket.GetSlot(CascadeSlot) == 0)
+                if (bucket.CascadeCount == 0)
                     return false;
 
                 // end remove logic
@@ -687,13 +681,14 @@ namespace SimdDictionary {
                 //  since the common case for an empty bucket is 0x0000
                 if (bucket.Count == 0) {
                     // This might be locked to 255 if we previously had a ton of collisions
-                    bucket.SetSlot(CascadeSlot, 0);
+                    bucket.CascadeCount = 0;
                     return true;
                 }
 
-                bucket.Suffixes = default;
                 if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>())
-                    bucket.Pairs = default;
+                    bucket = default;
+                else
+                    bucket.Suffixes = default;
 
                 return true;
             }
@@ -734,8 +729,7 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Bucket (ref Bucket bucket) {
                 for (int j = 0; j < bucket.Count; j++) {
-                    ref var pair = ref bucket.Pairs[j];
-                    if (EqualityComparer<V>.Default.Equals(pair.Value, Value)) {
+                    if (EqualityComparer<V>.Default.Equals(bucket.Pairs[j].Value, Value)) {
                         Result = true;
                         return false;
                     }
