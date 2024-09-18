@@ -55,8 +55,6 @@ namespace SimdDictionary {
             }
         }
 
-        internal record struct Entry (V Value);
-
         public enum InsertMode {
             // Fail the insertion if a matching key is found
             EnsureUnique,
@@ -83,9 +81,9 @@ namespace SimdDictionary {
         // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
         //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
         internal interface IKeySearcher {
-            static abstract ref Entry FindKeyInBucket (
+            static abstract ref V FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket,
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref V firstEntryInBucket,
                 int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             );
 
@@ -95,7 +93,7 @@ namespace SimdDictionary {
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
         internal interface IBucketCallback {
             // Return false to stop iteration
-            abstract bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry);
+            abstract bool Bucket (ref Bucket bucket, Span<V> values);
         }
     }
 }

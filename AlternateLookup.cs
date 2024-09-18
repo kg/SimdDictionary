@@ -32,10 +32,10 @@ namespace SimdDictionary
 
             public V this [TAlternateKey key] {
                 get {
-                    ref Entry value = ref FindKey(key);
+                    ref V value = ref FindKey(key);
                     if (Unsafe.IsNullRef(ref value))
                         throw new KeyNotFoundException($"Key {key} not found");
-                    return value.Value;
+                    return value;
                 }
             }
 
@@ -45,23 +45,23 @@ namespace SimdDictionary
                     value = default!;
                     return false;
                 } else {
-                    value = entry.Value;
+                    value = entry;
                     return true;
                 }
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal ref Entry FindKey (TAlternateKey key) {
+            internal ref V FindKey (TAlternateKey key) {
                 // This is duplicated from SimdDictionary.FindKey, look there for comments.
                 var dictionary = Dictionary;
                 if (dictionary._Count == 0)
-                    return ref Unsafe.NullRef<Entry>();
+                    return ref Unsafe.NullRef<V>();
 
                 var comparer = Comparer;
                 var hashCode = FinalizeHashCode(unchecked((uint)comparer.GetHashCode(key)));
 
                 var buckets = (Span<Bucket>)dictionary._Buckets;
-                var entries = (Span<Entry>)dictionary._Entries;
+                var entries = (Span<V>)dictionary._Entries;
                 var initialBucketIndex = dictionary.BucketIndexForHashCode(hashCode, buckets);
                 var suffix = GetHashSuffix(hashCode);
 
@@ -77,7 +77,7 @@ namespace SimdDictionary
                     ref var entry = ref FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
                     if (Unsafe.IsNullRef(ref entry)) {
                         if (bucket.GetSlot(CascadeSlot) == 0)
-                            return ref Unsafe.NullRef<Entry>();
+                            return ref Unsafe.NullRef<V>();
                     } else
                         return ref entry;
 
@@ -95,13 +95,13 @@ namespace SimdDictionary
                     }
                 } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
-                return ref Unsafe.NullRef<Entry>();
+                return ref Unsafe.NullRef<V>();
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal static ref Entry FindKeyInBucket (
+            internal static ref V FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref V firstEntryInBucket, 
                 int indexInBucket, IAlternateComparer<K, TAlternateKey> comparer, TAlternateKey needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
@@ -124,7 +124,7 @@ namespace SimdDictionary
                 }
 
                 matchIndexInBucket = -1;
-                return ref Unsafe.NullRef<Entry>();
+                return ref Unsafe.NullRef<V>();
             }
         }
     }

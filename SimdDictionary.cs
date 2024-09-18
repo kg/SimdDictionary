@@ -41,11 +41,11 @@ namespace SimdDictionary {
 
 #pragma warning disable CA1825
         private static readonly Bucket[] EmptyBuckets = [];
-        private static readonly Entry[] EmptyEntries = [];
+        private static readonly V[] EmptyEntries = [];
 #pragma warning restore CA1825
 
         private Bucket[] _Buckets = EmptyBuckets;
-        private Entry[] _Entries = EmptyEntries;
+        private V[] _Entries = EmptyEntries;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -127,7 +127,7 @@ namespace SimdDictionary {
             // Allocate both new arrays before updating the fields so that we don't get corrupted
             //  when running out of memory
             // HACK: Allocate an extra entry slot at the end so that we can safely do a trick when scanning keys
-            var newEntries = new Entry[actualCapacity + 1];
+            var newEntries = new V[actualCapacity + 1];
             var newBuckets = new Bucket[bucketCount];
             Thread.MemoryBarrier();
             // Ensure that when growing we store the new bigger entries array before storing the new
@@ -142,9 +142,9 @@ namespace SimdDictionary {
                     Environment.FailFast("Failed to rehash dictionary for resize operation");
         }
 
-        internal bool TryRehash (Bucket[] _oldBuckets, Entry[] _oldEntries) {
+        internal bool TryRehash (Bucket[] _oldBuckets, V[] _oldEntries) {
             var oldBuckets = (Span<Bucket>)_oldBuckets;
-            var oldEntries = (Span<Entry>)_oldEntries;
+            var oldEntries = (Span<V>)_oldEntries;
             for (int i = 0; i < oldBuckets.Length; i++) {
                 var baseIndex = i * BucketSizeI;
                 ref var bucket = ref oldBuckets[i];
@@ -155,7 +155,7 @@ namespace SimdDictionary {
                         continue;
 
                     ref var entry = ref oldEntries[baseIndex + j];
-                    if (TryInsert(bucket.Keys[j], entry.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                    if (TryInsert(bucket.Keys[j], entry, InsertMode.Rehashing) != InsertResult.OkAddedNew)
                         return false;
                 }
             }
@@ -253,9 +253,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static ref Entry FindKeyInBucket (
+            public static ref V FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref V firstEntryInBucket, 
                 int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
@@ -281,7 +281,7 @@ namespace SimdDictionary {
                 }
 
                 matchIndexInBucket = -1;
-                return ref Unsafe.NullRef<Entry>();
+                return ref Unsafe.NullRef<V>();
             }
         }
 
@@ -292,9 +292,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static ref Entry FindKeyInBucket (
+            public static ref V FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket, 
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref V firstEntryInBucket, 
                 int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
@@ -317,13 +317,13 @@ namespace SimdDictionary {
                 }
 
                 matchIndexInBucket = -1;
-                return ref Unsafe.NullRef<Entry>();
+                return ref Unsafe.NullRef<V>();
             }
         }
 #pragma warning restore CS8619
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref Entry FindKey (K key) {
+        internal ref V FindKey (K key) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
                 return ref FindKey<DefaultComparerKeySearcher>(key, null);
@@ -334,20 +334,20 @@ namespace SimdDictionary {
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is roughly halved.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref Entry FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        internal ref V FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
             // If count is 0 our buckets/entries might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
             //  so we need to bail out early for an empty collection.
             if (_Count == 0)
-                return ref Unsafe.NullRef<Entry>();
+                return ref Unsafe.NullRef<V>();
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
             var buckets = (Span<Bucket>)_Buckets;
             // The entries array can only ever grow, not shrink, so concurrent modification will at-worst cause us to get an
             //  entries array that is too big for the buckets array we've captured above. This is ensured by a barrier in Resize
-            var entries = (Span<Entry>)_Entries;
+            var entries = (Span<V>)_Entries;
             // We don't need to store/update the current bucket index for find operations unlike insert/remove operations,
             //  because we never need to use it for cascade counter cleanup. Removing the index makes the scan loop a bit simpler
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
@@ -383,7 +383,7 @@ namespace SimdDictionary {
                 ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
                 if (Unsafe.IsNullRef(ref entry)) {
                     if (bucket.GetSlot(CascadeSlot) == 0)
-                        return ref Unsafe.NullRef<Entry>();
+                        return ref Unsafe.NullRef<V>();
                 } else
                     return ref entry;
 
@@ -405,7 +405,7 @@ namespace SimdDictionary {
                 }
             } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
-            return ref Unsafe.NullRef<Entry>();
+            return ref Unsafe.NullRef<V>();
         }
 
         // public for Disasmo
@@ -419,7 +419,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool TryInsertIntoBucket (ref Bucket bucket, ref Entry firstBucketEntry, byte suffix, K key, V value) {
+        internal static bool TryInsertIntoBucket (ref Bucket bucket, ref V firstBucketEntry, byte suffix, K key, V value) {
             byte bucketCount = bucket.GetSlot(CountSlot);
             if (bucketCount >= BucketSizeU)
                 return false;
@@ -430,7 +430,7 @@ namespace SimdDictionary {
                 bucket.SetSlot(CountSlot, (byte)(bucketCount + 1));
                 bucket.SetSlot(bucketCount, suffix);
                 newKey = key;
-                entry = new Entry(value);
+                entry = value;
             }
 
             return true;
@@ -483,7 +483,7 @@ namespace SimdDictionary {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
             var buckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Entry>)_Entries;
+            var entries = (Span<V>)_Entries;
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var suffix = GetHashSuffix(hashCode);
 
@@ -505,7 +505,7 @@ namespace SimdDictionary {
                         if (mode == InsertMode.EnsureUnique)
                             return InsertResult.KeyAlreadyPresent;
                         else {
-                            entry.Value = value;
+                            entry = value;
                             return InsertResult.OkOverwroteExisting;
                         }
                     } else if (startIndex < BucketSizeI) {
@@ -552,7 +552,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, ref Entry entry, ref Entry firstBucketEntry) {
+        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, ref V entry, ref V firstBucketEntry) {
             var bucketCount = bucket.GetSlot(CountSlot);
             Debug.Assert(bucketCount > 0);
             unchecked {
@@ -568,13 +568,13 @@ namespace SimdDictionary {
                     newKey = replacementKey;
                     if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
                         replacementKey = default!;
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<V>())
                         replacementEntry = default;
                 } else {
                     bucket.SetSlot((uint)indexInBucket, 0);
                     if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
                         newKey = default!;
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<V>())
                         entry = default;
                 }
             }
@@ -592,7 +592,7 @@ namespace SimdDictionary {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
             var buckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Entry>)_Entries;
+            var entries = (Span<V>)_Entries;
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var suffix = GetHashSuffix(hashCode);
 
@@ -728,11 +728,10 @@ namespace SimdDictionary {
 
         internal struct ClearCallback : IBucketCallback {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, ref Entry entry) {
+            public bool Bucket (ref Bucket bucket, Span<V> entries) {
                 // TODO: Load both the count and cascade slots as a uint16 and clear if it's != 0,
                 //  since the common case for an empty bucket is 0x0000
-                var count = bucket.GetSlot(CountSlot);
-                if (count == 0) {
+                if (entries.Length == 0) {
                     // This might be locked to 255 if we previously had a ton of collisions
                     bucket.SetSlot(CascadeSlot, 0);
                     return true;
@@ -742,14 +741,8 @@ namespace SimdDictionary {
                 if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
                     bucket.Keys = default;
 
-                if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
-                    // This overrun-by-1 is fine because we allocate space for an extra entry.
-                    ref var lastEntry = ref Unsafe.Add(ref entry, count);
-                    while (!Unsafe.AreSame(ref entry, ref lastEntry)) {
-                        entry = default;
-                        entry = ref Unsafe.Add(ref entry, 1);
-                    }
-                }
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<V>())
+                    entries.Clear();
 
                 return true;
             }
@@ -761,11 +754,12 @@ namespace SimdDictionary {
 
             _Count = 0;
 #if SMART_CLEAR
+            // FIXME: Only do this if _Count is below say 0.5x?
             var c = new ClearCallback();
             EnumerateBuckets(ref c);
 #else
             Array.Clear(_Buckets);
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<V>())
                 Array.Clear(_Entries);
 #endif
         }
@@ -787,11 +781,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
-                var bucketCount = bucket.GetSlot(CountSlot);
-                for (int j = 0; j < bucketCount; j++) {
-                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    if (EqualityComparer<V>.Default.Equals(entry.Value, Value)) {
+            public bool Bucket (ref Bucket bucket, Span<V> entries) {
+                foreach (var entry in entries) {
+                    if (EqualityComparer<V>.Default.Equals(entry, Value)) {
                         Result = true;
                         return false;
                     }
@@ -834,7 +826,7 @@ namespace SimdDictionary {
                 value = default!;
                 return false;
             } else {
-                value = entry.Value;
+                value = entry;
                 return true;
             }
         }
@@ -848,21 +840,23 @@ namespace SimdDictionary {
             // We can't early-out if Count is 0 here since this could be invoked by Clear
 
             var buckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Entry>)_Entries;
+            var entries = (Span<V>)_Entries;
             // Guard against concurrent access
             if ((buckets.Length == 0) || (entries.Length == 0))
                 return;
 
             ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
                 lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
-            ref Entry entry = ref MemoryMarshal.GetReference(entries);
 
             while (true) {
-                var ok = callback.Bucket(ref bucket, ref entry);
+                // Spans seem to generate worse code here overall, but they enable us to use Span.Clear to clear
+                //  ranges of entries in one operation. This gets us closer to SCG.Dictionary clear performance for
+                //  dictionaries that are mostly full, but makes us a bit slower for empty dictionaries.
+                var ok = callback.Bucket(ref bucket, entries.Slice(0, bucket.GetSlot(CountSlot)));
 
                 if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket)) {
                     bucket = ref Unsafe.Add(ref bucket, 1);
-                    entry = ref Unsafe.Add(ref entry, BucketSizeI);
+                    entries = entries.Slice(BucketSizeI);
                 } else
                     break;
             }
@@ -878,12 +872,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
-                var bucketCount = bucket.GetSlot(CountSlot);
-                for (int j = 0; j < bucketCount; j++) {
-                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
-                }
+            public bool Bucket (ref Bucket bucket, Span<V> entries) {
+                for (int j = 0; j < entries.Length; j++)
+                    Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entries[j]);
 
                 return true;
             }
@@ -899,12 +890,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
-                var bucketCount = bucket.GetSlot(CountSlot);
-                for (int j = 0; j < bucketCount; j++) {
-                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    Array[Index++] = new DictionaryEntry(bucket.Keys[j], entry.Value);
-                }
+            public bool Bucket (ref Bucket bucket, Span<V> entries) {
+                for (int j = 0; j < entries.Length; j++)
+                    Array[Index++] = new DictionaryEntry(bucket.Keys[j], entries[j]);
 
                 return true;
             }
@@ -920,12 +908,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
-                var bucketCount = bucket.GetSlot(CountSlot);
-                for (int j = 0; j < bucketCount; j++) {
-                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
-                }
+            public bool Bucket (ref Bucket bucket, Span<V> entries) {
+                for (int j = 0; j < entries.Length; j++)
+                    Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entries[j]);
 
                 return true;
             }

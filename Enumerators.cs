@@ -140,7 +140,7 @@ namespace SimdDictionary {
             private int _bucketIndex, _valueIndex, _valueIndexLocal;
             private Bucket _currentBucket;
             private Bucket[] _buckets;
-            private Entry[] _entries;
+            private V[] _entries;
 
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -152,7 +152,7 @@ namespace SimdDictionary {
             public V CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    return _entries[_valueIndex].Value;
+                    return _entries[_valueIndex];
                 }
             }
 
@@ -160,7 +160,7 @@ namespace SimdDictionary {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     ref var entry = ref _entries[_valueIndex];
-                    return new KeyValuePair<K, V>(_currentBucket.Keys[_valueIndexLocal], entry.Value);
+                    return new KeyValuePair<K, V>(_currentBucket.Keys[_valueIndexLocal], entry);
                 }
             }
             object IEnumerator.Current => Current;
@@ -168,7 +168,7 @@ namespace SimdDictionary {
             DictionaryEntry IDictionaryEnumerator.Entry {
                 get {
                     ref var entry = ref _entries[_valueIndex];
-                    return new DictionaryEntry(_currentBucket.Keys[_valueIndexLocal], entry.Value);
+                    return new DictionaryEntry(_currentBucket.Keys[_valueIndexLocal], entry);
                 }
             }
 
