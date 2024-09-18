@@ -9,6 +9,7 @@ using TKey = System.Int64;
 using TValue = System.Int64;
 
 namespace Benchmarks {
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
     public class BCLInsertion : Insertion<Dictionary<TKey, TValue>> {
     }
@@ -22,6 +23,7 @@ namespace Benchmarks {
             Dict.ContainsKey(key);
     }
 
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
     public class BCLRemoval : Removal<Dictionary<TKey, TValue>> { 
     }
@@ -48,6 +50,7 @@ namespace Benchmarks {
         protected override IEnumerable<TValue> GetValues () => Dict.Values;
     }
 
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
     public class SimdInsertion : Insertion<SimdDictionary<TKey, TValue>> {
     }
@@ -61,6 +64,7 @@ namespace Benchmarks {
             Dict.ContainsKey(key);
     }
 
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
     public class SimdRemoval : Removal<SimdDictionary<TKey, TValue>> { 
     }
@@ -85,5 +89,13 @@ namespace Benchmarks {
     public class SimdIterate : Iterate<SimdDictionary<TKey, TValue>> {
         protected override IEnumerable<TKey> GetKeys () => Dict.Keys;
         protected override IEnumerable<TValue> GetValues () => Dict.Values;
+    }
+
+    [MemoryDiagnoser()]
+    public class BCLMemoryUsage : MemoryUsage<Dictionary<TKey, TValue>> {
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdMemoryUsage : MemoryUsage<SimdDictionary<TKey, TValue>> {
     }
 }

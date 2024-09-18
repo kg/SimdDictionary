@@ -28,73 +28,6 @@ namespace SimdDictionary {
         ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
         where K : notnull
     {
-        // This size must match BucketSizeI/U
-        // A size of 4 or 8 would turn some imuls into shifts, but the impact of that seems small compared
-        //  to the wasted memory
-        [InlineArray(14)]
-        internal struct InlineKeyArray {
-            public K Key0;
-        }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 16)]
-        internal struct Bucket {
-            public Vector128<byte> Suffixes;
-            public InlineKeyArray Keys;
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public readonly byte GetSlot (int index) {
-                Debug.Assert(index < Vector128<byte>.Count);
-                // the extract-lane opcode this generates is slower than doing a byte load from memory,
-                //  even if we already have the bucket in a register. Not sure why, but my guess based on agner's
-                //  instruction tables is that it's because lane extract generates more uops than a byte move.
-                // the two operations have the same latency on icelake, and the byte move's latency is lower on zen4
-                // return self[index];
-                // index &= 15;
-                return Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), index);
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void SetSlot (nuint index, byte value) {
-                Debug.Assert(index < (nuint)Vector128<byte>.Count);
-                // index &= 15;
-                Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index) = value;
-            }
-        }
-
-        internal record struct Entry (V Value);
-
-        public enum InsertMode {
-            // Fail the insertion if a matching key is found
-            EnsureUnique,
-            // Overwrite the value if a matching key is found
-            OverwriteValue,
-            // Don't scan for existing matches before inserting into the bucket. This is only
-            //  safe to do when copying an existing dictionary or rehashing an existing dictionary
-            Rehashing
-        }
-
-        public enum InsertResult {
-            // The specified key did not exist in the dictionary, and a key/value pair was inserted
-            OkAddedNew,
-            // The specified key was found in the dictionary and we overwrote the value
-            OkOverwroteExisting,
-            // The dictionary is full and needs to be grown before you can perform an insert
-            NeedToGrow,
-            // The specified key already exists in the dictionary, so nothing was done
-            KeyAlreadyPresent,
-        }
-
-        public const int InitialCapacity = 0,
-            // User-specified capacity values will be increased to this percentage in order
-            //  to maintain an ideal load factor. FIXME: 120 isn't right
-            OversizePercentage = 120,
-            // TODO: A BucketSize of 8 would waste 4 slots in every bucket, but would turn some imuls into shifts
-            BucketSizeI = 14,
-            CountSlot = 14,
-            CascadeSlot = 15;
-
-        public const uint BucketSizeU = 14;
-
 #if PRIME_BUCKET_COUNTS
         private ulong _fastModMultiplier;
 #endif
@@ -409,7 +342,7 @@ namespace SimdDictionary {
         // If we disable inlining for it, our generated code size is roughly halved.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ref Entry FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
-            where TKeySearcher : IKeySearcher 
+            where TKeySearcher : struct, IKeySearcher 
         {
             // If count is 0 our buckets/entries might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
             //  so we need to bail out early for an empty collection.
@@ -510,6 +443,10 @@ namespace SimdDictionary {
             return true;
         }
 
+        // This is a slow path that only runs when a bucket overflows, so we don't need to inline it.
+        // Inlining it improves remove/insert performance on average a bit though, for remove the difference is:
+        // 1.0244x (inlined) vs 1.0991x (not inlined)
+        // The code size improvement from not inlining it appears to be quite small (930 bytes vs 933), so for now it's inlined.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void AdjustCascadeCounts (
             Span<Bucket> buckets, ref Bucket bucket, ref Bucket initialBucket, ref Bucket lastBucket,
@@ -544,7 +481,7 @@ namespace SimdDictionary {
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
-            where TKeySearcher : IKeySearcher 
+            where TKeySearcher : struct, IKeySearcher 
         {
             // This duplicates a lot of logic from FindKey, so I won't replicate its comments here.
             if (_Count >= _GrowAtCount)
@@ -565,6 +502,8 @@ namespace SimdDictionary {
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
+                // start insert logic
+
                 if (mode != InsertMode.Rehashing) {
                     int startIndex = FindSuffixInBucket(ref bucket, suffix);
                     ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out _);
@@ -590,16 +529,14 @@ namespace SimdDictionary {
                     return InsertResult.OkAddedNew;
                 }
 
-                // We're checking multiple buckets, so initialize the loop control variables
+                // end insert logic
+
                 if (Unsafe.IsNullRef(ref initialBucket)) {
                     initialBucket = ref bucket;
                     lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
                 }
 
                 if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                    // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
-                    //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
-                    // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
                     bucket = ref MemoryMarshal.GetReference(buckets);
                     firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                 } else {
@@ -608,8 +545,7 @@ namespace SimdDictionary {
                 }
             } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
 
-            // FIXME: This shouldn't be possible
-            return InsertResult.NeedToGrow;
+            return InsertResult.CorruptedInternalState;
         }
 
         // Inlining required for disasmo
@@ -654,7 +590,7 @@ namespace SimdDictionary {
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
-            where TKeySearcher : IKeySearcher
+            where TKeySearcher : struct, IKeySearcher
         {
             // This duplicates a lot of logic from FindKey, so I won't replicate its comments here.
             if (_Count <= 0)
@@ -675,28 +611,34 @@ namespace SimdDictionary {
             ref var firstBucketEntry = ref entries[initialBucketIndex * BucketSizeI];
 
             do {
+                // start remove logic
+
                 int startIndex = FindSuffixInBucket(ref bucket, suffix);
                 ref var entry = ref TKeySearcher.FindKeyInBucket(ref bucket, ref firstBucketEntry, startIndex, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref entry)) {
                     _Count--;
                     RemoveFromBucket(ref bucket, indexInBucket, ref entry, ref firstBucketEntry);
+                    // If the loop control variables are populated, we had to scan multiple buckets to find the item we just
+                    //  removed, so go back and decrement the cascade counters.
                     if (!Unsafe.IsNullRef(ref initialBucket))
                         AdjustCascadeCounts(buckets, ref bucket, ref initialBucket, ref lastBucket, false);
                     return true;
-                } else if (bucket.GetSlot(CascadeSlot) == 0)
+                }
+
+                // Important: If the cascade counter is 0 and we didn't find the item, we don't want to check any other buckets.
+                // Otherwise, we'd scan the whole table fruitlessly looking for a matching key.
+                if (bucket.GetSlot(CascadeSlot) == 0)
                     return false;
 
-                // We're checking multiple buckets, so initialize the loop control variables
+                // end remove logic
+
                 if (Unsafe.IsNullRef(ref initialBucket)) {
                     initialBucket = ref bucket;
                     lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
                 }
 
                 if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                    // If we used GetArrayDataReference here, it would allow buckets/entries to expire and shrink our stack frame by 16
-                    //  bytes. But then we'd be exposed to corruption from concurrent accesses, since the underlying arrays could change.
-                    // Doing that doesn't seem to actually improve the generated code at all either, despite the smaller stack frame.
                     bucket = ref MemoryMarshal.GetReference(buckets);
                     firstBucketEntry = ref MemoryMarshal.GetReference(entries);
                 } else {
@@ -726,6 +668,8 @@ namespace SimdDictionary {
                     case InsertResult.NeedToGrow:
                         Resize(_GrowAtCount * 2);
                         goto retry;
+                    case InsertResult.CorruptedInternalState:
+                        throw new Exception("Corrupted internal state");
                 }
             }
         }
@@ -779,6 +723,8 @@ namespace SimdDictionary {
                 case InsertResult.NeedToGrow:
                     Resize(_GrowAtCount * 2);
                     goto retry;
+                case InsertResult.CorruptedInternalState:
+                    throw new Exception("Corrupted internal state");
                 default:
                     return false;
             }
@@ -788,6 +734,9 @@ namespace SimdDictionary {
             Add(item.Key, item.Value);
 
         public void Clear () {
+            if (_Count == 0)
+                return;
+
             _Count = 0;
             Array.Clear(_Buckets);
             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())

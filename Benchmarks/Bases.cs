@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using BenchmarkDotNet.Attributes;
@@ -93,7 +94,7 @@ namespace Benchmarks {
         }
     }
 
-    public class Insertion<T> : DictSuiteBase<T>
+    public abstract class Insertion<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
 
         [Benchmark]
@@ -135,7 +136,7 @@ namespace Benchmarks {
         }
     }
 
-    public class Removal<T> : DictSuiteBase<T>
+    public abstract class Removal<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
 
         [Benchmark]
@@ -165,9 +166,14 @@ namespace Benchmarks {
             if (Dict.Count != Size)
                 throw new Exception("Dict size changed");
         }
+
+        [Benchmark]
+        public void Clear () {
+            Dict.Clear();
+        }
     }
 
-    public class Resize<T> : DictSuiteBase<T>
+    public abstract class Resize<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue>, new() {
 
         public override bool Populate => false;
@@ -307,6 +313,32 @@ namespace Benchmarks {
                     throw new Exception($"Not found: {UnusedKeys[i]}");
 
             Dict.Clear();
+        }
+    }
+
+    public abstract class MemoryUsage<T> : DictSuiteBase<T>
+        where T : IDictionary<TKey, TValue> {
+
+        public int MinCapacity = 0, 
+            MaxCapacity = 8192,
+            CapacityStep = 4;
+
+        ConstructorInfo Ctor;
+
+        protected MemoryUsage () {
+            Ctor = typeof(T).GetConstructor(new [] { typeof(int) });
+            if (Ctor == null)
+                throw new Exception("Ctor is missing????");
+        }
+
+        [Benchmark]
+        public void AllocateEverySize () {
+            object[] sizeArray = new object[1];
+            for (int i = MinCapacity; i <= MaxCapacity; i += CapacityStep) {
+                var c = Math.Min(MaxCapacity, i);
+                sizeArray[0] = c;
+                var instance = (T)Ctor.Invoke(sizeArray);
+            }
         }
     }
 }
