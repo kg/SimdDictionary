@@ -74,7 +74,7 @@ namespace SimdDictionary {
         public SimdDictionary (SimdDictionary<K, V> source) 
             : this (source.Count, source.Comparer) {
             _Count = source.Count;
-            // FIXME: Optimize this
+            // FIXME: Use EnumerateBuckets
             foreach (var kvp in source)
                 if (TryInsert(kvp.Key, kvp.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
                     Environment.FailFast("Failed to insert key/value pair while copying dictionary");
@@ -773,9 +773,7 @@ namespace SimdDictionary {
             !Unsafe.IsNullRef(ref FindKey(key));
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
-            using (var e = GetEnumerator())
-                while (e.MoveNext())
-                    array[arrayIndex++] = e.Current;
+            CopyToArray(array, arrayIndex);
         }
 
         public Enumerator GetEnumerator () =>

@@ -45,6 +45,7 @@ namespace SimdDictionary {
                 Dictionary.ContainsKey(item);
 
             void ICollection<K>.CopyTo (K[] array, int arrayIndex) {
+                // FIXME: Use EnumerateBuckets
                 using (var e = GetEnumerator())
                     while (e.MoveNext())
                         array[arrayIndex++] = e.Current;
@@ -110,6 +111,7 @@ namespace SimdDictionary {
                 throw new InvalidOperationException();
 
             void ICollection<V>.CopyTo (V[] array, int arrayIndex) {
+                // FIXME: Use EnumerateBuckets
                 using (var e = GetEnumerator())
                     while (e.MoveNext())
                         array[arrayIndex++] = e.Current;
