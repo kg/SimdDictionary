@@ -7,8 +7,8 @@
 // #define PERMUTE_HASH_CODES
 // Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
 // #define FORCE_SCALAR_IMPLEMENTATION
-// It's unclear to me whether doing a selective clear only of occupied buckets is actually faster than Array.Clear
-// #define SMART_CLEAR
+// Walk buckets instead of Array.Clear. Improves clear performance when mostly empty, slight regression when full
+#define SMART_CLEAR
 
 using System;
 using System.Collections;
@@ -730,8 +730,11 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void Bucket (ref Bucket bucket, ref Entry entry) {
                 var count = bucket.GetSlot(CountSlot);
-                if (count == 0)
+                if (count == 0) {
+                    // This might be locked to 255 if we previously had a ton of collisions
+                    bucket.SetSlot(CascadeSlot, 0);
                     return;
+                }
 
                 bucket.Suffixes = default;
                 if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
@@ -741,6 +744,7 @@ namespace SimdDictionary {
                     ref var lastEntry = ref Unsafe.Add(ref entry, count - 1);
                     do {
                         entry = default;
+                        entry = ref Unsafe.Add(ref entry, 1);
                     } while (!Unsafe.AreSame(ref entry, ref lastEntry));
                 }
             }
