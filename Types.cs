@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -77,6 +78,23 @@ namespace SimdDictionary {
             KeyAlreadyPresent,
             // The dictionary is clearly corrupted
             CorruptedInternalState,
+        }
+
+        // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
+        //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
+        internal interface IKeySearcher {
+            static abstract ref Entry FindKeyInBucket (
+                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
+                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket,
+                int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+            );
+
+            static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
+        }
+
+        // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
+        internal interface IBucketCallback {
+            abstract void Bucket (ref Bucket bucket, ref Entry firstBucketEntry);
         }
     }
 }

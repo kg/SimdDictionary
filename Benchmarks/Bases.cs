@@ -166,9 +166,27 @@ namespace Benchmarks {
             if (Dict.Count != Size)
                 throw new Exception("Dict size changed");
         }
+    }
+
+    public abstract class Clearing<T> : DictSuiteBase<T>
+        where T : IDictionary<TKey, TValue> {
+        [Benchmark]
+        public void ClearEmptyDict () {
+            Dict.Clear();
+        }
 
         [Benchmark]
-        public void Clear () {
+        public void ClearWithOneItem () {
+            Dict.Clear();
+            Dict.Add(Keys[0], Values[0]);
+            Dict.Clear();
+        }
+
+        [Benchmark]
+        public void ClearWithManyItems () {
+            Dict.Clear();
+            for (int i = 0; i < Size; i++)
+                Dict.Add(Keys[i], Values[i]);
             Dict.Clear();
         }
     }

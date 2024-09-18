@@ -28,6 +28,9 @@ namespace Benchmarks {
     public class BCLRemoval : Removal<Dictionary<TKey, TValue>> { 
     }
 
+    public class BCLClearing : Clearing<Dictionary<TKey, TValue>> { 
+    }
+
     [MemoryDiagnoser()]
     public class BCLResize : Resize<Dictionary<TKey, TValue>> {
     }
@@ -67,6 +70,9 @@ namespace Benchmarks {
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
     public class SimdRemoval : Removal<SimdDictionary<TKey, TValue>> { 
+    }
+
+    public class SimdClearing : Clearing<SimdDictionary<TKey, TValue>> { 
     }
 
     [MemoryDiagnoser()]

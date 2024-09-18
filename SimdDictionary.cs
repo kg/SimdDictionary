@@ -7,6 +7,8 @@
 // #define PERMUTE_HASH_CODES
 // Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
 // #define FORCE_SCALAR_IMPLEMENTATION
+// It's unclear to me whether doing a selective clear only of occupied buckets is actually faster than Array.Clear
+// #define SMART_CLEAR
 
 using System;
 using System.Collections;
@@ -187,9 +189,12 @@ namespace SimdDictionary {
         //  it is never zero (because a zero suffix indicates an empty slot.)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static byte GetHashSuffix (uint hashCode) {
-            // The bottom bits of the hash form the bucket index, so we
-            //  use the top bits of the hash as a suffix
-            var result = unchecked((byte)(hashCode >> 24));
+            // The bottom bits of the hash form the bucket index, so we use the top bits as a suffix
+            // We could use a lower shift to try and improve tail collision performance,
+            //  but the improvement from that is pretty small and it makes head collisions worse.
+            // The right solution is just to use a good hash function.
+            const int hashShift = 24;
+            var result = unchecked((byte)(hashCode >> hashShift));
             // Assuming the JIT turns this into a cmov, this should be better on average
             //  since it nearly doubles the number of possible suffixes, improving collision
             //  resistance and reducing the odds of having to check multiple keys.
@@ -239,18 +244,6 @@ namespace SimdDictionary {
         }
 
 #pragma warning disable CS8619
-        // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
-        //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
-        internal interface IKeySearcher {
-            static abstract ref Entry FindKeyInBucket (
-                // We have to use UnscopedRef to allow lazy initialization of the key reference below.
-                [UnscopedRef] ref Bucket bucket, [UnscopedRef] ref Entry firstEntryInBucket,
-                int indexInBucket, IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
-            );
-
-            static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
-        }
-
         // These have to be structs so that the JIT will specialize callers instead of Canonizing them
         internal struct DefaultComparerKeySearcher : IKeySearcher {
 
@@ -733,14 +726,38 @@ namespace SimdDictionary {
         void ICollection<KeyValuePair<K, V>>.Add (KeyValuePair<K, V> item) =>
             Add(item.Key, item.Value);
 
+        internal struct ClearCallback : IBucketCallback {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void Bucket (ref Bucket bucket, ref Entry entry) {
+                var count = bucket.GetSlot(CountSlot);
+                if (count == 0)
+                    return;
+
+                bucket.Suffixes = default;
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<K>())
+                    bucket.Keys = default;
+
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
+                    ref var lastEntry = ref Unsafe.Add(ref entry, count - 1);
+                    do {
+                        entry = default;
+                    } while (!Unsafe.AreSame(ref entry, ref lastEntry));
+                }
+            }
+        }
+
         public void Clear () {
             if (_Count == 0)
                 return;
 
             _Count = 0;
+#if SMART_CLEAR
+            EnumerateBuckets(new ClearCallback());
+#else
             Array.Clear(_Buckets);
             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                 Array.Clear(_Entries);
+#endif
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) =>
@@ -785,32 +802,71 @@ namespace SimdDictionary {
         public object Clone () =>
             new SimdDictionary<K, V>(this);
 
-        public void CopyTo (KeyValuePair<K, V>[] array, int index) {
-            if (array == null)
-                throw new ArgumentNullException(nameof(array));
-            if ((uint)index > (uint)array.Length)
-                throw new ArgumentOutOfRangeException(nameof(index));
-            if (array.Length - index < Count)
-                throw new ArgumentException("Destination array too small", nameof(index));
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnumerateBuckets<TCallback> (TCallback callback)
+            where TCallback : struct, IBucketCallback {
+            // We can't early-out if Count is 0 here since this could be invoked by Clear
 
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
-            var destination = (Span<KeyValuePair<K, V>>)array;
-            ref var firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+            // Guard against concurrent access
+            if ((buckets.Length == 0) || (entries.Length == 0))
+                return;
 
-            for (int i = 0; i < buckets.Length; i++) {
-                ref var bucket = ref buckets[i];
-                var bucketCount = bucket.GetSlot(CountSlot);
-                for (int j = 0; j < bucketCount; j++) {
-                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    array[index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
-                }
+            ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
+                lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
+            ref Entry entry = ref MemoryMarshal.GetReference(entries);
 
-                firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
+            while (true) {
+                callback.Bucket(ref bucket, ref entry);
+
+                if (!Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                    entry = ref Unsafe.Add(ref entry, BucketSizeI);
+                } else
+                    break;
             }
         }
 
-        private void CopyTo (object[] array, int index) {
+        private struct CopyToKvp : IBucketCallback {
+            public readonly KeyValuePair<K, V>[] Array;
+            public int Index;
+
+            public CopyToKvp (KeyValuePair<K, V>[] array, int index) {
+                Array = array;
+                Index = index;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
+                var bucketCount = bucket.GetSlot(CountSlot);
+                for (int j = 0; j < bucketCount; j++) {
+                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
+                    Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
+                }
+            }
+        }
+
+        private struct CopyToObject : IBucketCallback {
+            public readonly object[] Array;
+            public int Index;
+
+            public CopyToObject (object[] array, int index) {
+                Array = array;
+                Index = index;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
+                var bucketCount = bucket.GetSlot(CountSlot);
+                for (int j = 0; j < bucketCount; j++) {
+                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
+                    Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
+                }
+            }
+        }
+
+        private void CopyToArray<T> (T[] array, int index) {
             if (array == null)
                 throw new ArgumentNullException(nameof(array));
             if ((uint)index > (uint)array.Length)
@@ -818,21 +874,20 @@ namespace SimdDictionary {
             if (array.Length - index < Count)
                 throw new ArgumentException("Destination array too small", nameof(index));
 
-            var buckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Entry>)_Entries;
-            var destination = (Span<object>)array;
-            ref var firstBucketEntry = ref MemoryMarshal.GetReference(entries);
+            if (array is KeyValuePair<K, V>[] kvp)
+                EnumerateBuckets(new CopyToKvp(kvp, index));
+            else if (array is object[] o)
+                EnumerateBuckets(new CopyToObject(o, index));
+            else
+                throw new ArgumentException("Unsupported destination array type");
+        }
 
-            for (int i = 0; i < buckets.Length; i++) {
-                ref var bucket = ref buckets[i];
-                var bucketCount = bucket.GetSlot(CountSlot);
-                for (int j = 0; j < bucketCount; j++) {
-                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
-                    array[index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
-                }
+        public void CopyTo (KeyValuePair<K, V>[] array, int index) {
+            CopyToArray(array, index);
+        }
 
-                firstBucketEntry = ref Unsafe.Add(ref firstBucketEntry, BucketSizeI);
-            }
+        private void CopyTo (object[] array, int index) {
+            CopyToArray(array, index);
         }
 
         void IDictionary.Add (object key, object? value) =>
