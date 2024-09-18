@@ -22,6 +22,9 @@ namespace Benchmarks {
 
         protected override bool ContainsKey (long key) =>
             Dict.ContainsKey(key);
+
+        protected override bool ContainsValue (long value) =>
+            Dict.ContainsValue(value);
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
@@ -66,6 +69,9 @@ namespace Benchmarks {
 
         protected override bool ContainsKey (long key) =>
             Dict.ContainsKey(key);
+
+        protected override bool ContainsValue (long value) =>
+            Dict.ContainsValue(value);
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]

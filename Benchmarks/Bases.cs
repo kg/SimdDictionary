@@ -116,6 +116,7 @@ namespace Benchmarks {
 
         protected abstract bool TryGetValue (TKey key, out TValue value);
         protected abstract bool ContainsKey (TKey key);
+        protected abstract bool ContainsValue (TValue value);
 
         [Benchmark]
         public void FindExisting () {
@@ -132,6 +133,14 @@ namespace Benchmarks {
             for (int i = 0; i < Size; i++) {
                 if (ContainsKey(UnusedKeys[i]))
                     throw new Exception("Found missing item");
+            }
+        }
+
+        [Benchmark]
+        public void DoesContainValue () {
+            for (int i = 0; i < Size; i++) {
+                if (!ContainsValue(Values[i]))
+                    throw new Exception("Value {Values[i]} not found");
             }
         }
     }

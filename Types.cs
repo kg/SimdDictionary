@@ -94,7 +94,8 @@ namespace SimdDictionary {
 
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
         internal interface IBucketCallback {
-            abstract void Bucket (ref Bucket bucket, ref Entry firstBucketEntry);
+            // Return false to stop iteration
+            abstract bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry);
         }
     }
 }

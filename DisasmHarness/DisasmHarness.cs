@@ -21,4 +21,8 @@ public static class DisasmHarness
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryRemove () =>
         Dict.Remove(0);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void Clear () => 
+        Dict.Clear();
 }

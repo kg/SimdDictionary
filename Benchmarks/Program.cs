@@ -93,6 +93,10 @@ namespace Benchmarks {
                 throw new KeyNotFoundException();
             }
 
+            for (int i = 0; i < c; i++)
+                if (!test.ContainsValue(values[i]))
+                    throw new Exception();
+
             for (int j = 0; j < d; j++)
                 for (int i = 0; i < c; i++)
                     if (!test.TryGetValue(keys[i], out _))

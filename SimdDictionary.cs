@@ -728,12 +728,14 @@ namespace SimdDictionary {
 
         internal struct ClearCallback : IBucketCallback {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void Bucket (ref Bucket bucket, ref Entry entry) {
+            public bool Bucket (ref Bucket bucket, ref Entry entry) {
+                // TODO: Load both the count and cascade slots as a uint16 and clear if it's != 0,
+                //  since the common case for an empty bucket is 0x0000
                 var count = bucket.GetSlot(CountSlot);
                 if (count == 0) {
                     // This might be locked to 255 if we previously had a ton of collisions
                     bucket.SetSlot(CascadeSlot, 0);
-                    return;
+                    return true;
                 }
 
                 bucket.Suffixes = default;
@@ -748,6 +750,8 @@ namespace SimdDictionary {
                         entry = ref Unsafe.Add(ref entry, 1);
                     }
                 }
+
+                return true;
             }
         }
 
@@ -757,7 +761,8 @@ namespace SimdDictionary {
 
             _Count = 0;
 #if SMART_CLEAR
-            EnumerateBuckets(new ClearCallback());
+            var c = new ClearCallback();
+            EnumerateBuckets(ref c);
 #else
             Array.Clear(_Buckets);
             if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
@@ -771,6 +776,38 @@ namespace SimdDictionary {
 
         public bool ContainsKey (K key) =>
             !Unsafe.IsNullRef(ref FindKey(key));
+
+        internal struct ContainsValueCallback : IBucketCallback {
+            public readonly V Value;
+            public bool Result;
+
+            public ContainsValueCallback (V value) {
+                Value = value;
+                Result = false;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
+                var bucketCount = bucket.GetSlot(CountSlot);
+                for (int j = 0; j < bucketCount; j++) {
+                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
+                    if (EqualityComparer<V>.Default.Equals(entry.Value, Value)) {
+                        Result = true;
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        public bool ContainsValue (V value) {
+            if (_Count == 0)
+                return false;
+
+            var callback = new ContainsValueCallback(value);
+            EnumerateBuckets(ref callback);
+            return callback.Result;
+        }
 
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
             CopyToArray(array, arrayIndex);
@@ -806,7 +843,7 @@ namespace SimdDictionary {
             new SimdDictionary<K, V>(this);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnumerateBuckets<TCallback> (TCallback callback)
+        private void EnumerateBuckets<TCallback> (ref TCallback callback)
             where TCallback : struct, IBucketCallback {
             // We can't early-out if Count is 0 here since this could be invoked by Clear
 
@@ -821,9 +858,9 @@ namespace SimdDictionary {
             ref Entry entry = ref MemoryMarshal.GetReference(entries);
 
             while (true) {
-                callback.Bucket(ref bucket, ref entry);
+                var ok = callback.Bucket(ref bucket, ref entry);
 
-                if (!Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket)) {
                     bucket = ref Unsafe.Add(ref bucket, 1);
                     entry = ref Unsafe.Add(ref entry, BucketSizeI);
                 } else
@@ -841,12 +878,35 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
+            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
                 var bucketCount = bucket.GetSlot(CountSlot);
                 for (int j = 0; j < bucketCount; j++) {
                     ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
                     Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
                 }
+
+                return true;
+            }
+        }
+
+        private struct CopyToDictionaryEntry : IBucketCallback {
+            public readonly DictionaryEntry[] Array;
+            public int Index;
+
+            public CopyToDictionaryEntry (DictionaryEntry[] array, int index) {
+                Array = array;
+                Index = index;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
+                var bucketCount = bucket.GetSlot(CountSlot);
+                for (int j = 0; j < bucketCount; j++) {
+                    ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
+                    Array[Index++] = new DictionaryEntry(bucket.Keys[j], entry.Value);
+                }
+
+                return true;
             }
         }
 
@@ -860,12 +920,14 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
+            public bool Bucket (ref Bucket bucket, ref Entry firstBucketEntry) {
                 var bucketCount = bucket.GetSlot(CountSlot);
                 for (int j = 0; j < bucketCount; j++) {
                     ref var entry = ref Unsafe.Add(ref firstBucketEntry, j);
                     Array[Index++] = new KeyValuePair<K, V>(bucket.Keys[j], entry.Value);
                 }
+
+                return true;
             }
         }
 
@@ -877,11 +939,16 @@ namespace SimdDictionary {
             if (array.Length - index < Count)
                 throw new ArgumentException("Destination array too small", nameof(index));
 
-            if (array is KeyValuePair<K, V>[] kvp)
-                EnumerateBuckets(new CopyToKvp(kvp, index));
-            else if (array is object[] o)
-                EnumerateBuckets(new CopyToObject(o, index));
-            else
+            if (array is KeyValuePair<K, V>[] kvp) {
+                var c = new CopyToKvp(kvp, index);
+                EnumerateBuckets(ref c);
+            } else if (array is DictionaryEntry[] de) {
+                var c = new CopyToDictionaryEntry(de, index);
+                EnumerateBuckets(ref c);
+            } else if (array is object[] o) {
+                var c = new CopyToObject(o, index);
+                EnumerateBuckets(ref c);
+            } else
                 throw new ArgumentException("Unsupported destination array type");
         }
 
