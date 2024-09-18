@@ -8,8 +8,7 @@
 // Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
 // #define FORCE_SCALAR_IMPLEMENTATION
 // Walk buckets instead of Array.Clear. Improves clear performance when mostly empty, slight regression when full
-// FIXME: This breaks SimdTailCollisions and causes it to crash during jitting.
-// #define SMART_CLEAR
+#define SMART_CLEAR
 
 using System;
 using System.Collections;
@@ -742,11 +741,12 @@ namespace SimdDictionary {
                     bucket.Keys = default;
 
                 if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
-                    ref var lastEntry = ref Unsafe.Add(ref entry, count - 1);
-                    do {
+                    // This overrun-by-1 is fine because we allocate space for an extra entry.
+                    ref var lastEntry = ref Unsafe.Add(ref entry, count);
+                    while (!Unsafe.AreSame(ref entry, ref lastEntry)) {
                         entry = default;
                         entry = ref Unsafe.Add(ref entry, 1);
-                    } while (!Unsafe.AreSame(ref entry, ref lastEntry));
+                    }
                 }
             }
         }

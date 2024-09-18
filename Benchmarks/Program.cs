@@ -57,6 +57,11 @@ namespace Benchmarks {
                 if (tcTest[tcs[i]] != i)
                     throw new Exception();
             }
+            tcTest.Clear();
+            for (int i = 0; i < tcs.Count; i++) {
+                if (tcTest.TryGetValue(tcs[i], out _))
+                    throw new Exception();
+            }
 
             // Don't pre-allocate capacity, so that we check growth/rehashing
             var test = new SimdDictionary<TKey, TValue>(0);
