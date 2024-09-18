@@ -45,6 +45,19 @@ namespace Benchmarks {
             List<TKey> keys = new(c),
                 unusedKeys = new(c);
             List<TValue> values = new (c);
+
+            List<TailCollider> tcs = new();
+            var tcTest = new SimdDictionary<TailCollider, int>();
+            for (int i = 0; i < 40960; i++) {
+                var tc = new TailCollider();
+                tcs.Add(tc);
+                tcTest.Add(tc, i);
+            }
+            for (int i = 0; i < tcs.Count; i++) {
+                if (tcTest[tcs[i]] != i)
+                    throw new Exception();
+            }
+
             // Don't pre-allocate capacity, so that we check growth/rehashing
             var test = new SimdDictionary<TKey, TValue>(0);
 

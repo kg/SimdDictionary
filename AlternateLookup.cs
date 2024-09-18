@@ -1,6 +1,4 @@
-﻿//#define ENABLE_ALTERNATE_LOOKUP
-
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
