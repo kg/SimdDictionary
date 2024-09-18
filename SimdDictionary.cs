@@ -841,6 +841,19 @@ namespace SimdDictionary {
 
             var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<V>)_Entries;
+
+            // This produces much smaller code but for some reason it's also much slower. I can't really explain it.
+            /*
+            for (int i = 0, j = 0; (i < buckets.Length) && (j < entries.Length); i++, j += BucketSizeI) {
+                ref var bucket = ref buckets[i];
+                // FIXME: Can we suppress the range check on entries.Slice?
+                var bucketCount = bucket.GetSlot(CountSlot);
+                var ok = callback.Bucket(ref bucket, entries.Slice(j, bucketCount));
+                if (!ok)
+                    break;
+            }
+            */
+
             // Guard against concurrent access
             if ((buckets.Length == 0) || (entries.Length == 0))
                 return;
