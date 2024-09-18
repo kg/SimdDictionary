@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -103,5 +104,99 @@ namespace Benchmarks {
 
     [MemoryDiagnoser()]
     public class SimdMemoryUsage : MemoryUsage<SimdDictionary<TKey, TValue>> {
+    }
+
+    [MemoryDiagnoser()]
+    [DisassemblyDiagnoser()]
+    public class SimdAlternateLookup {
+        public sealed class ArrayComparer : IEqualityComparer<char[]> {
+            public bool Equals (char[]? x, char[]? y) =>
+                x.SequenceEqual(y);
+
+            public int GetHashCode ([DisallowNull] char[] obj) =>
+                obj.Length;
+        }
+
+        public sealed class Comparer : IAlternateComparer<string, char[]> {
+            public bool Equals (string key, char[] other) {
+                if (key.Length != other.Length)
+                    return false;
+                for (int i = 0; i < other.Length; i++)
+                    if (key[i] != other[i])
+                        return false;
+                return true;
+            }
+
+            public int GetHashCode (char[] other) {
+                // FIXME
+                return (new string(other)).GetHashCode();
+            }
+        }
+
+        public const int Size = 4096;
+        SimdDictionary<string, Int64> Dict = new (Size);
+        SimdDictionary<string, Int64>.AlternateLookup<char[]> Lookup;
+        Random RNG = new Random(1234);
+        List<char[]> Keys = new(Size), UnusedKeys = new(Size);
+        List<Int64> Values = new (Size);
+
+        public SimdAlternateLookup() {
+            var ac = new ArrayComparer();
+
+            for (int i = 0; i < Size; i++) {
+                var key = NextKey();
+                while (Keys.Contains(key, ac))
+                    key = NextKey();
+                var value = RNG.NextInt64();
+                Keys.Add(key);
+                Values.Add(value);
+                Dict.Add(new string(key), value);
+            }
+
+            for (int i = 0; i < Size; i++) {
+                var key = NextKey();
+                while (Keys.Contains(key, ac) || UnusedKeys.Contains(key, ac))
+                    key = NextKey();
+                UnusedKeys.Add(key);
+            }
+
+            // FIXME: Comparer
+            Lookup = new (Dict, new Comparer());
+        }
+
+        private char[] NextKey () {
+            var l = RNG.Next(2, 8);
+            var result = new char[l];
+            for (int i = 0; i < l; i++)
+                result[i] = (char)RNG.Next(32, 127);
+            return result;
+        }
+
+        [Benchmark]
+        public void Accessor () {
+            for (int i = 0; i < Size; i++) {
+                var value = Lookup[Keys[i]];
+                if (value != Values[i])
+                    throw new Exception();
+            }
+        }
+
+        [Benchmark]
+        public void TryGetValueExisting () {
+            for (int i = 0; i < Size; i++) {
+                if (!Lookup.TryGetValue(Keys[i], out var value))
+                    throw new Exception();
+                if (value != Values[i])
+                    throw new Exception();
+            }
+        }
+
+        [Benchmark]
+        public void TryGetValueMissing () {
+            for (int i = 0; i < Size; i++) {
+                if (Lookup.TryGetValue(UnusedKeys[i], out _))
+                    throw new Exception();
+            }
+        }
     }
 }
