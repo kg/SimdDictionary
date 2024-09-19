@@ -2,7 +2,7 @@
 //  much better collision resistance than power-of-two bucket counts do. However,
 // Murmur3 finalization + Power-of-two bucket counts (see below) performs much better and has
 //  higher collision resistance due to improving the quality of suffixes
-// #define PRIME_BUCKET_COUNTS
+#define PRIME_BUCKET_COUNTS
 // Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
 // #define PERMUTE_HASH_CODES
 // Walk buckets instead of Array.Clear. Improves clear performance when mostly empty, slight regression when full
@@ -12,7 +12,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 
@@ -26,6 +25,7 @@ namespace SimdDictionary {
         private ulong _fastModMultiplier;
 #endif
 
+        // TODO: Make these reference types initialized on demand / add cache fields for the accessors that box them.
         public readonly KeyCollection Keys;
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
@@ -58,6 +58,7 @@ namespace SimdDictionary {
         public SimdDictionary (int capacity, IEqualityComparer<K>? comparer) {
             if (typeof(K).IsValueType)
                 Comparer = comparer;
+            // HACK: DefaultEqualityComparer<K> for string is really bad
             else if (typeof(K) == typeof(string))
                 Comparer = comparer ?? (IEqualityComparer<K>)StringComparer.Ordinal;
             else
@@ -67,13 +68,19 @@ namespace SimdDictionary {
             Values = new ValueCollection(this);
         }
 
-        public SimdDictionary (SimdDictionary<K, V> source) 
-            : this (source.Count, source.Comparer) {
-            _Count = source.Count;
-            // FIXME: Use EnumerateBuckets
-            foreach (var kvp in source)
-                if (TryInsert(kvp.Key, kvp.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
-                    Environment.FailFast("Failed to insert key/value pair while copying dictionary");
+        public SimdDictionary (SimdDictionary<K, V> source) {
+            Keys = new KeyCollection(this);
+            Values = new ValueCollection(this);
+            Comparer = source.Comparer;
+            _Count = source._Count;
+            _GrowAtCount = source._GrowAtCount;
+#if PRIME_BUCKET_COUNTS
+            _fastModMultiplier = source._fastModMultiplier;
+#endif
+            if (source._Buckets != EmptyBuckets) {
+                _Buckets = new Bucket[source._Buckets.Length];
+                Array.Copy(source._Buckets, _Buckets, source._Buckets.Length);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -105,7 +112,7 @@ namespace SimdDictionary {
                 bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
 
 #if PRIME_BUCKET_COUNTS
-                bucketCount = HashHelpers.GetPrime(capacity);
+                bucketCount = HashHelpers.GetPrime(bucketCount);
                 _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
 #else
                 // Power-of-two bucket counts enable using & (count - 1) instead of mod count
@@ -530,6 +537,7 @@ namespace SimdDictionary {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Bucket (ref Bucket bucket) {
+                // We could micro-optimize this, but we don't need to - it's already faster than SCG
                 for (int j = 0; j < bucket.Count; j++) {
                     if (EqualityComparer<V>.Default.Equals(bucket.Pairs[j].Value, Value)) {
                         Result = true;

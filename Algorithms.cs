@@ -58,6 +58,7 @@ namespace SimdDictionary {
             }
         }
 
+        // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnumerateBuckets<TCallback> (ref TCallback callback)
             where TCallback : struct, IBucketCallback {
