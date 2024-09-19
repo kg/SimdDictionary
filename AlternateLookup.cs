@@ -1,12 +1,7 @@
 ﻿using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
-using System.Runtime.Serialization;
 
 namespace SimdDictionary
 {
@@ -65,31 +60,17 @@ namespace SimdDictionary
                 var initialBucketIndex = dictionary.BucketIndexForHashCode(hashCode, buckets);
                 var suffix = GetHashSuffix(hashCode);
 
-                ref Bucket lastBucket = ref Unsafe.NullRef<Bucket>(),
-                    initialBucket = ref Unsafe.NullRef<Bucket>(),
-                    bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
-
+                var enumerator = new LoopingBucketEnumerator(buckets, initialBucketIndex);
                 do {
-                    int bucketCount = bucket.Count,
-                        startIndex = FindSuffixInBucket(ref bucket, suffix, bucketCount);
-                    ref var pair = ref FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
+                    int bucketCount = enumerator.bucket.Count,
+                        startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
+                    ref var pair = ref FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
                     if (Unsafe.IsNullRef(ref pair)) {
-                        if (bucket.CascadeCount == 0)
+                        if (enumerator.bucket.CascadeCount == 0)
                             return ref Unsafe.NullRef<Pair>();
                     } else
                         return ref pair;
-
-                    if (Unsafe.IsNullRef(ref initialBucket)) {
-                        initialBucket = ref bucket;
-                        lastBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), buckets.Length - 1);
-                    }
-
-                    if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                        bucket = ref MemoryMarshal.GetReference(buckets);
-                    } else {
-                        bucket = ref Unsafe.Add(ref bucket, 1);
-                    }
-                } while (!Unsafe.AreSame(ref bucket, ref initialBucket));
+                } while (enumerator.Advance());
 
                 return ref Unsafe.NullRef<Pair>();
             }
