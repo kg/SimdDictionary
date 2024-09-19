@@ -8,24 +8,13 @@
 // Walk buckets instead of Array.Clear. Improves clear performance when mostly empty, slight regression when full
 #define SMART_CLEAR
 
-// TODO: If we had access to 'allows ref struct' and refs in static interface methods, we could encapsulate
-//  the bucket iteration logic from FindKey/TryInsert/TryRemove into a single EnumerateBuckets2 method and then
-//  extract their loop bodies into callbacks, like was done for CopyTo/Clear. In NET8 this is impossible without
-//  jumping through 12 different hoops.
-
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.Arm;
-using System.Runtime.Intrinsics.X86;
-using System.Runtime.Intrinsics.Wasm;
 using System.Runtime.Serialization;
-using System.Diagnostics.CodeAnalysis;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V> : 
@@ -46,7 +35,9 @@ namespace SimdDictionary {
 
 #pragma warning disable CA1825
         // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
-        //  operations don't need to do a (_Count == 0) check.
+        //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
+        //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
+        //  we're empty.
         private static readonly Bucket[] EmptyBuckets = new Bucket[1];
 #pragma warning restore CA1825
 

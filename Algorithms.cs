@@ -20,11 +20,15 @@ namespace SimdDictionary {
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
         internal ref struct LoopingBucketEnumerator {
             public int length;
-            public ref Bucket firstBucket, lastBucket, initialBucket, bucket;
+            public ref Bucket firstBucket, bucket;
+            // These are NullRef until the start of your second iteration.
+            public ref Bucket lastBucket, initialBucket;
 
-            // Will never fail. You don't need to call Advance before your first loop iteration.
+            // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public LoopingBucketEnumerator (Span<Bucket> buckets, int initialBucketIndex) {
+                Debug.Assert(buckets.Length > 0);
+
                 firstBucket = ref MemoryMarshal.GetReference(buckets);
                 length = buckets.Length;
 
@@ -36,6 +40,7 @@ namespace SimdDictionary {
                 bucket = ref Unsafe.Add(ref firstBucket, initialBucketIndex);
             }
 
+            // Will lazily initialize initialBucket/lastBucket at the end of your first iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Advance () {
                 if (Unsafe.IsNullRef(ref initialBucket)) {
