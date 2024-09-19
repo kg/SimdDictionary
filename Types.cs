@@ -13,10 +13,9 @@ namespace SimdDictionary {
         where K : notnull
     {
         public const int InitialCapacity = 0,
-            // User-specified capacity values will be increased to this percentage in order
+            // User-specified capacity values will be increased by this percentage in order
             //  to maintain an ideal load factor. FIXME: 120 isn't right
             OversizePercentage = 120,
-            // TODO: A BucketSize of 8 would waste 4 slots in every bucket, but would turn some imuls into shifts
             BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;
@@ -26,9 +25,7 @@ namespace SimdDictionary {
             public V Value;
         }
         
-        // This size must match BucketSizeI/U
-        // A size of 4 or 8 would turn some imuls into shifts, but the impact of that seems small compared
-        //  to the wasted memory
+        // This size must match or exceed BucketSizeI
         [InlineArray(14)]
         internal struct InlinePairArray {
             public Pair Pair0;
