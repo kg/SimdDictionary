@@ -199,7 +199,7 @@ namespace SimdDictionary {
 #endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static unsafe int FindSuffixInBucket (ref Bucket bucket, byte suffix) {
+        internal static unsafe int FindSuffixInBucket (ref Bucket bucket, byte suffix, int bucketCount) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
                 // FIXME: It would be nice to precompute the search vector outside of the loop, to hide the latency of vpbroadcastb.
@@ -224,7 +224,7 @@ namespace SimdDictionary {
 #endif
                 var haystack = (byte*)Unsafe.AsPointer(ref bucket);
                 // FIXME: Hand-unrolling into a chain of cmovs like in dn_simdhash doesn't work.
-                for (int i = 0, c = bucket.Count; i < c; i++) {
+                for (int i = 0; i < bucketCount; i++) {
                     if (haystack[i] == suffix)
                         return i;
                 }
@@ -313,7 +313,7 @@ namespace SimdDictionary {
 
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is roughly halved.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         internal ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
@@ -347,7 +347,7 @@ namespace SimdDictionary {
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = bucket.Count, 
-                    startIndex = FindSuffixInBucket(ref bucket, suffix);
+                    startIndex = FindSuffixInBucket(ref bucket, suffix, bucketCount);
                 // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                 // Using a cmov to conditionally perform the count GetSlot also isn't faster
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
@@ -387,15 +387,14 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool TryInsertIntoBucket (ref Bucket bucket, byte suffix, K key, V value) {
-            byte bucketCount = bucket.Count;
+        internal static bool TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, K key, V value) {
             if (bucketCount >= BucketSizeU)
                 return false;
 
             unchecked {
                 ref var destination = ref Unsafe.Add(ref bucket.Pairs.Pair0, bucketCount);
                 bucket.Count = (byte)(bucketCount + 1);
-                bucket.SetSlot(bucketCount, suffix);
+                bucket.SetSlot((nuint)bucketCount, suffix);
                 destination.Key = key;
                 destination.Value = value;
             }
@@ -459,10 +458,9 @@ namespace SimdDictionary {
 
             do {
                 // start insert logic
-
+                int bucketCount = bucket.Count;
                 if (mode != InsertMode.Rehashing) {
-                    int bucketCount = bucket.Count, 
-                        startIndex = FindSuffixInBucket(ref bucket, suffix);
+                    int startIndex = FindSuffixInBucket(ref bucket, suffix, bucketCount);
                     ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
 
                     if (!Unsafe.IsNullRef(ref pair)) {
@@ -477,7 +475,7 @@ namespace SimdDictionary {
                     }
                 }
 
-                if (TryInsertIntoBucket(ref bucket, suffix, key, value)) {
+                if (TryInsertIntoBucket(ref bucket, suffix, bucketCount, key, value)) {
                     // If the loop control variables are populated, that means we had to try to insert into multiple buckets.
                     // Increase the cascade counters for the buckets we checked before this one.
                     if (!Unsafe.IsNullRef(ref initialBucket))
@@ -514,8 +512,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, ref Pair toRemove) {
-            var bucketCount = bucket.Count;
+        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, int bucketCount, ref Pair toRemove) {
             Debug.Assert(bucketCount > 0);
             unchecked {
                 int replacementIndexInBucket = bucketCount - 1;
@@ -558,12 +555,12 @@ namespace SimdDictionary {
                 // start remove logic
 
                 int bucketCount = bucket.Count, 
-                    startIndex = FindSuffixInBucket(ref bucket, suffix);
+                    startIndex = FindSuffixInBucket(ref bucket, suffix, bucketCount);
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref pair)) {
                     _Count--;
-                    RemoveFromBucket(ref bucket, indexInBucket, ref pair);
+                    RemoveFromBucket(ref bucket, indexInBucket, bucketCount, ref pair);
                     // If the loop control variables are populated, we had to scan multiple buckets to find the item we just
                     //  removed, so go back and decrement the cascade counters.
                     if (!Unsafe.IsNullRef(ref initialBucket))

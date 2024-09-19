@@ -70,8 +70,9 @@ namespace SimdDictionary
                     bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
 
                 do {
-                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    ref var pair = ref FindKeyInBucket(ref bucket, startIndex, comparer, key, out _);
+                    int bucketCount = bucket.Count,
+                        startIndex = FindSuffixInBucket(ref bucket, suffix, bucketCount);
+                    ref var pair = ref FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
                     if (Unsafe.IsNullRef(ref pair)) {
                         if (bucket.CascadeCount == 0)
                             return ref Unsafe.NullRef<Pair>();
@@ -97,20 +98,19 @@ namespace SimdDictionary
             internal static ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket,
-                int indexInBucket, IAlternateComparer<K, TAlternateKey> comparer, 
+                int indexInBucket, int bucketCount, IAlternateComparer<K, TAlternateKey> comparer, 
                 TAlternateKey needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                int count = bucket.Count;
                 // It might be faster on some targets to early-out before the address computation(s) below
                 //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
                 //  and this implementation generates smaller code
 
                 // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                 ref var pair = ref Unsafe.NullRef<Pair>();
-                for (; indexInBucket < count; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
+                for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
                     if (Unsafe.IsNullRef(ref pair))
                         pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
                     if (comparer!.Equals(pair.Key, needle)) {
