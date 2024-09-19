@@ -599,10 +599,10 @@ namespace SimdDictionary {
         public V this[K key] { 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
-                if (!TryGetValue(key, out var result))
+                ref var pair = ref FindKey(key);
+                if (Unsafe.IsNullRef(ref pair))
                     throw new KeyNotFoundException($"Key not found: {key}");
-                else
-                    return result;
+                return pair.Value;
             }
             set {
             retry:
@@ -713,9 +713,10 @@ namespace SimdDictionary {
 #endif
         }
 
-        bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) =>
-            TryGetValue(item.Key, out var value) &&
-            (value?.Equals(item.Value) == true);
+        bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
+            ref var pair = ref FindKey(item.Key);
+            return !Unsafe.IsNullRef(ref pair) && (pair.Value?.Equals(item.Value) == true);
+        }
 
         public bool ContainsKey (K key) =>
             !Unsafe.IsNullRef(ref FindKey(key));
@@ -788,10 +789,16 @@ namespace SimdDictionary {
             where TCallback : struct, IBucketCallback {
             // We can't early-out if Count is 0 here since this could be invoked by Clear
 
-            var buckets = (Span<Bucket>)_Buckets;           
-            foreach (ref var bucket in buckets) {
+            // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
+            var buckets = (Span<Bucket>)_Buckets;
+            ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
+                lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
+
+            while (true) {
                 var ok = callback.Bucket(ref bucket);
-                if (!ok)
+                if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket))
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                else
                     break;
             }
         }
