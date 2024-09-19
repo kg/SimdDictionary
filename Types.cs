@@ -21,8 +21,6 @@ namespace SimdDictionary {
             CountSlot = 14,
             CascadeSlot = 15;
 
-        public const uint BucketSizeU = 14;
-
         internal struct Pair {
             public K Key;
             public V Value;

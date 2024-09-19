@@ -101,8 +101,6 @@ namespace SimdDictionary {
         }
 
         internal void Resize (int capacity) {
-            Debug.Assert(BucketSizeI == BucketSizeU);
-
             int bucketCount;
 #if PRIME_BUCKET_COUNTS
             ulong fastModMultiplier;
@@ -268,7 +266,7 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, K key, V value) {
-            if (bucketCount >= BucketSizeU)
+            if (bucketCount >= BucketSizeI)
                 return false;
 
             unchecked {
