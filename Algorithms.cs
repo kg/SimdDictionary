@@ -37,6 +37,8 @@ namespace SimdDictionary {
                 lastBucket = ref Unsafe.NullRef<Bucket>();
                 initialBucket = ref Unsafe.NullRef<Bucket>();
                 // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
+                // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
+                Debug.Assert(initialBucketIndex < length);
                 bucket = ref Unsafe.Add(ref firstBucket, initialBucketIndex);
             }
 

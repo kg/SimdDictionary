@@ -364,9 +364,6 @@ namespace SimdDictionary {
         internal bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher
         {
-            // if (_Count <= 0)
-            //     return false;
-
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
             var buckets = (Span<Bucket>)_Buckets;
@@ -375,8 +372,6 @@ namespace SimdDictionary {
 
             var enumerator = new LoopingBucketEnumerator(buckets, initialBucketIndex);
             do {
-                // start remove logic
-
                 int bucketCount = enumerator.bucket.Count,
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
