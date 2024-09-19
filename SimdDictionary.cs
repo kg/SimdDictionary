@@ -5,8 +5,6 @@
 // #define PRIME_BUCKET_COUNTS
 // Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
 // #define PERMUTE_HASH_CODES
-// Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
-// #define FORCE_SCALAR_IMPLEMENTATION
 // Walk buckets instead of Array.Clear. Improves clear performance when mostly empty, slight regression when full
 #define SMART_CLEAR
 

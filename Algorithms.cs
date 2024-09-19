@@ -1,4 +1,7 @@
-﻿using System;
+﻿// Force disables the vectorized suffix search implementations so you can test/benchmark the scalar one
+// #define FORCE_SCALAR_IMPLEMENTATION
+
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
