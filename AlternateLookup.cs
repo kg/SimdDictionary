@@ -83,10 +83,6 @@ namespace SimdDictionary
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                // It might be faster on some targets to early-out before the address computation(s) below
-                //  by doing a direct comparison between indexInBucket and count. In my local testing, it's not faster,
-                //  and this implementation generates smaller code
-
                 // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                 ref var pair = ref Unsafe.NullRef<Pair>();
                 for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {

@@ -198,8 +198,6 @@ namespace SimdDictionary {
                         _currentBucket = _buckets[_bucketIndex];
                     }
 
-                    // We iterate over the whole bucket including empty slots to keep the indices in sync
-                    // FIXME: It would be faster to only iterate occupied slots and then skip based on count
                     while (_valueIndexLocal < count) {
                         var suffix = _currentBucket.GetSlot(_valueIndexLocal);
                         if (suffix != 0)
