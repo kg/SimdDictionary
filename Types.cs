@@ -40,6 +40,9 @@ namespace SimdDictionary {
         internal struct Bucket {
             public Vector128<byte> Suffixes;
             public InlinePairArray Pairs;
+            // For 8-byte keys + values this makes a bucket 256 bytes, changing the native code for the lookup
+            //  buckets[index] from an imul to a shift
+            // public Vector128<byte> Padding;
 
             public ref byte Count {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -99,7 +102,7 @@ namespace SimdDictionary {
         internal interface IKeySearcher {
             static abstract ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, int startIndexInBucket, 
+                [UnscopedRef] ref Bucket bucket, int startIndexInBucket, int bucketCount,
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             );
 

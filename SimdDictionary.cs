@@ -244,16 +244,15 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, int indexInBucket, 
+                [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
 
-                int count = bucket.Count;
                 if (typeof(K).IsValueType) {
                     // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                     ref var pair = ref Unsafe.NullRef<Pair>();
-                    for (; indexInBucket < count; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
+                    for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
                         // It might be good to find a way to compile this down to a cmov instead of the current branch
                         if (Unsafe.IsNullRef(ref pair))
                             pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
@@ -280,16 +279,15 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, int indexInBucket, 
+                [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                int count = bucket.Count;
                 // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
                 ref var pair = ref Unsafe.NullRef<Pair>();
-                for (; indexInBucket < count; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
+                for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
                     if (Unsafe.IsNullRef(ref pair))
                         pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
                     if (comparer!.Equals(needle, pair.Key)) {
@@ -347,10 +345,12 @@ namespace SimdDictionary {
                 bucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialBucketIndex);
 
             do {
-                int startIndex = FindSuffixInBucket(ref bucket, suffix);
+                // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
+                int bucketCount = bucket.Count, 
+                    startIndex = FindSuffixInBucket(ref bucket, suffix);
                 // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
                 // Using a cmov to conditionally perform the count GetSlot also isn't faster
-                ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, comparer, key, out _);
+                ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
                 if (Unsafe.IsNullRef(ref pair)) {
                     if (bucket.CascadeCount == 0)
                         return ref Unsafe.NullRef<Pair>();
@@ -461,8 +461,9 @@ namespace SimdDictionary {
                 // start insert logic
 
                 if (mode != InsertMode.Rehashing) {
-                    int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                    ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, comparer, key, out _);
+                    int bucketCount = bucket.Count, 
+                        startIndex = FindSuffixInBucket(ref bucket, suffix);
+                    ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
 
                     if (!Unsafe.IsNullRef(ref pair)) {
                         if (mode == InsertMode.EnsureUnique)
@@ -556,8 +557,9 @@ namespace SimdDictionary {
             do {
                 // start remove logic
 
-                int startIndex = FindSuffixInBucket(ref bucket, suffix);
-                ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, comparer, key, out int indexInBucket);
+                int bucketCount = bucket.Count, 
+                    startIndex = FindSuffixInBucket(ref bucket, suffix);
+                ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref pair)) {
                     _Count--;
