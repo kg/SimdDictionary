@@ -225,12 +225,6 @@ namespace SimdDictionary {
         internal ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
-            // If count is 0 our buckets might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
-            //  so we need to bail out early for an empty collection.
-            // FIXME: Try removing this to optimize out the field load, since most callers won't be doing lookups on an empty dict?
-            // if (_Count == 0)
-            //     return ref Unsafe.NullRef<Pair>();
-
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var buckets = (Span<Bucket>)_Buckets;
             var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);

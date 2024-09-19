@@ -50,8 +50,6 @@ namespace SimdDictionary
             internal ref Pair FindKey (TAlternateKey key) {
                 // This is duplicated from SimdDictionary.FindKey, look there for comments.
                 var dictionary = Dictionary;
-                // if (dictionary._Count == 0)
-                //     return ref Unsafe.NullRef<Pair>();
 
                 var comparer = Comparer;
                 var hashCode = FinalizeHashCode(unchecked((uint)comparer.GetHashCode(key)));
