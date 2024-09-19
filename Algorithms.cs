@@ -12,6 +12,9 @@ using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V> {
+        // Extracting all this logic into each caller improves codegen slightly + reduces code size slightly, but the
+        //  duplication reduces maintainability, so I'm pretty happy doing this instead.
+        // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
         internal ref struct LoopingBucketEnumerator {
             public int length;
             public ref Bucket firstBucket, lastBucket, initialBucket, bucket;
@@ -97,6 +100,40 @@ namespace SimdDictionary {
                         return i;
                 }
                 return 32;
+            }
+        }
+
+        // This is a slow path that only runs when a bucket overflows, so we don't need to inline it.
+        // Inlining it improves remove/insert performance on average a bit though, for remove the difference is:
+        // 1.0244x (inlined) vs 1.0991x (not inlined)
+        // The code size improvement from not inlining it appears to be quite small (930 bytes vs 933), so for now it's inlined.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void AdjustCascadeCounts (
+            ref Bucket bucket, ref Bucket firstBucket, ref Bucket initialBucket, ref Bucket lastBucket,
+            bool increase
+        ) {
+            // We may have cascaded out of a previous bucket; if so, scan backwards and update
+            //  the cascade count for every bucket we previously scanned.
+            while (!Unsafe.AreSame(ref bucket, ref initialBucket)) {
+                // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
+                bucket = ref Unsafe.Subtract(ref bucket, 1);
+                if (Unsafe.IsAddressLessThan(ref bucket, ref firstBucket))
+                    bucket = ref lastBucket;
+
+                var cascadeCount = bucket.CascadeCount;
+                if (increase) {
+                    // Never overflow (wrap around) the counter
+                    if (cascadeCount < 255)
+                        bucket.CascadeCount = (byte)(cascadeCount + 1);
+                } else {
+                    if (cascadeCount == 0)
+                        Environment.FailFast("Corrupted dictionary bucket cascade slot");
+                    // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
+                    //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
+                    // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
+                    else if (cascadeCount < 255)
+                        bucket.CascadeCount = (byte)(cascadeCount - 1);
+                }
             }
         }
 
