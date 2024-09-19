@@ -523,6 +523,8 @@ namespace SimdDictionary {
                 bucket.Count = (byte)replacementIndexInBucket;
                 ref var replacement = ref Unsafe.Add(ref bucket.Pairs.Pair0, replacementIndexInBucket);
                 if (!Unsafe.AreSame(ref toRemove, ref replacement)) {
+                    // TODO: This is the only place in the find/insert/remove algorithms that actually needs indexInBucket.
+                    // Is there some way to optimize it out?
                     bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                     bucket.SetSlot((uint)replacementIndexInBucket, 0);
                     toRemove = replacement;
@@ -680,10 +682,8 @@ namespace SimdDictionary {
         internal struct ClearCallback : IBucketCallback {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Bucket (ref Bucket bucket) {
-                // TODO: Load both the count and cascade slots as a uint16 and clear if it's != 0,
-                //  since the common case for an empty bucket is 0x0000
                 if (bucket.Count == 0) {
-                    // This might be locked to 255 if we previously had a ton of collisions
+                    // This might be locked to 255 if we previously had a ton of collisions, so zero it and then exit
                     bucket.CascadeCount = 0;
                     return true;
                 }
@@ -697,6 +697,8 @@ namespace SimdDictionary {
             }
         }
 
+        // NOTE: In benchmarks this looks much slower than SCG clear, but that's because our backing array at 4096 is
+        //  much bigger than SCG's, so we're just measuring how much slower Array.Clear is on a bigger array
         public void Clear () {
             if (_Count == 0)
                 return;
@@ -708,8 +710,6 @@ namespace SimdDictionary {
             EnumerateBuckets(ref c);
 #else
             Array.Clear(_Buckets);
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<V>())
-                Array.Clear(_Entries);
 #endif
         }
 

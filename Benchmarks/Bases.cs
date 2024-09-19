@@ -192,6 +192,14 @@ namespace Benchmarks {
         }
 
         [Benchmark]
+        public void ClearWithSomeItems () {
+            Dict.Clear();
+            for (int i = 0, c = Size / 3; i < c; i++)
+                Dict.Add(Keys[i], Values[i]);
+            Dict.Clear();
+        }
+
+        [Benchmark]
         public void ClearWithManyItems () {
             Dict.Clear();
             for (int i = 0; i < Size; i++)
