@@ -104,6 +104,10 @@ namespace SimdDictionary {
             Debug.Assert(BucketSizeI == BucketSizeU);
 
             int bucketCount;
+#if PRIME_BUCKET_COUNTS
+            ulong fastModMultiplier;
+#endif
+
             checked {
                 capacity = (int)((long)capacity * OversizePercentage / 100);
                 if (capacity < 1)
@@ -113,7 +117,7 @@ namespace SimdDictionary {
 
 #if PRIME_BUCKET_COUNTS
                 bucketCount = HashHelpers.GetPrime(bucketCount);
-                _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
+                fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
 #else
                 // Power-of-two bucket counts enable using & (count - 1) instead of mod count
                 bucketCount = (int)BitOperations.RoundUpToPowerOf2((uint)bucketCount);
@@ -126,9 +130,12 @@ namespace SimdDictionary {
                 _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
 
-            // Allocate both new arrays before updating the fields so that we don't get corrupted
-            //  when running out of memory
+            // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
+#if PRIME_BUCKET_COUNTS
+            // FIXME: How do we guard this against concurrent modification?
+            _fastModMultiplier = fastModMultiplier;
+#endif
             _Buckets = newBuckets;
             // FIXME: In-place rehashing
             if ((oldBuckets != EmptyBuckets) && (_Count > 0))
