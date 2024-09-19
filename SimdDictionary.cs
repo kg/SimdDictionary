@@ -37,10 +37,14 @@ namespace SimdDictionary {
         public readonly KeyCollection Keys;
         public readonly ValueCollection Values;
         public readonly IEqualityComparer<K>? Comparer;
-        private int _Count, _GrowAtCount;
+        // It's important for an empty dictionary to have both count and growatcount be 0
+        private int _Count = 0, 
+            _GrowAtCount = 0;
 
 #pragma warning disable CA1825
-        private static readonly Bucket[] EmptyBuckets = [];
+        // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
+        //  operations don't need to do a (_Count == 0) check.
+        private static readonly Bucket[] EmptyBuckets = new Bucket[1];
 #pragma warning restore CA1825
 
         private Bucket[] _Buckets = EmptyBuckets;
@@ -88,7 +92,7 @@ namespace SimdDictionary {
             if (Capacity >= capacity)
                 return;
 
-            int nextIncrement = (_Buckets.Length == 0)
+            int nextIncrement = (_Buckets == EmptyBuckets)
                 ? capacity
                 : Capacity * 2;
 
@@ -126,7 +130,7 @@ namespace SimdDictionary {
             var newBuckets = new Bucket[bucketCount];
             _Buckets = newBuckets;
             // FIXME: In-place rehashing
-            if ((oldBuckets.Length > 0) && (_Count > 0))
+            if ((oldBuckets != EmptyBuckets) && (_Count > 0))
                 if (!TryRehash(oldBuckets))
                     Environment.FailFast("Failed to rehash dictionary for resize operation");
         }
@@ -313,15 +317,15 @@ namespace SimdDictionary {
 
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is roughly halved.
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
             // If count is 0 our buckets might be an empty array, which would make 'buckets.Length - 1' produce -1 below,
             //  so we need to bail out early for an empty collection.
             // FIXME: Try removing this to optimize out the field load, since most callers won't be doing lookups on an empty dict?
-            if (_Count == 0)
-                return ref Unsafe.NullRef<Pair>();
+            // if (_Count == 0)
+            //     return ref Unsafe.NullRef<Pair>();
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
@@ -538,8 +542,8 @@ namespace SimdDictionary {
             where TKeySearcher : struct, IKeySearcher
         {
             // This duplicates a lot of logic from FindKey, so I won't replicate its comments here.
-            if (_Count <= 0)
-                return false;
+            // if (_Count <= 0)
+            //     return false;
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
 
