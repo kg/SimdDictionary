@@ -165,26 +165,24 @@ namespace SimdDictionary {
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);
-                Debug.Assert(comparer == null);
+                Debug.Assert(comparer != null);
 
-                bucketCount -= indexInBucket;
-                if (bucketCount <= 0)
+                int count = bucketCount - indexInBucket;
+                if (count <= 0)
                     return ref Unsafe.NullRef<Pair>();
 
                 ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
-                while (bucketCount > 0) {
+                while (true) {
                     if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
-                        // FIXME: Calculate this using bucketCount and indexInBucket. It's possible but I'm not smart enough
-                        //  to figure out the math right now
-                        matchIndexInBucket = (int)(Unsafe.ByteOffset(ref bucket.Pairs.Pair0, ref pair) / sizeof(Pair));
+                        matchIndexInBucket = bucketCount - count;
                         return ref pair;
                     }
-                    --bucketCount;
-                    pair = ref Unsafe.Add(ref pair, 1);
+
+                    if (--count <= 0)
+                        return ref Unsafe.NullRef<Pair>();
+                    else
+                        pair = ref Unsafe.Add(ref pair, 1);
                 }
-
-                return ref Unsafe.NullRef<Pair>();
-
             }
         }
 
@@ -204,25 +202,24 @@ namespace SimdDictionary {
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                bucketCount -= indexInBucket;
-                if (bucketCount <= 0)
+                int count = bucketCount - indexInBucket;
+                if (count <= 0)
                     return ref Unsafe.NullRef<Pair>();
 
                 ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
-                // FIXME: This loop spills one value to/from the stack every iteration, and it's not clear what.
+                // FIXME: This loop spills two values to/from the stack every iteration, and it's not clear which.
                 // The ValueType-with-default-comparer one doesn't.
-                while (bucketCount > 0) {
+                while (true) {
                     if (comparer.Equals(needle, pair.Key)) {
-                        // FIXME: Calculate this using bucketCount and indexInBucket. It's possible but I'm not smart enough
-                        //  to figure out the math right now
-                        matchIndexInBucket = (int)(Unsafe.ByteOffset(ref bucket.Pairs.Pair0, ref pair) / sizeof(Pair));
+                        matchIndexInBucket = bucketCount - count;
                         return ref pair;
                     }
-                    --bucketCount;
-                    pair = ref Unsafe.Add(ref pair, 1);
-                }
 
-                return ref Unsafe.NullRef<Pair>();
+                    if (--count <= 0)
+                        return ref Unsafe.NullRef<Pair>();
+                    else
+                        pair = ref Unsafe.Add(ref pair, 1);
+                }
             }
         }
 #pragma warning restore CS8619
