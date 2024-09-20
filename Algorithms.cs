@@ -158,35 +158,32 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static ref Pair FindKeyInBucket (
+            public static unsafe ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
+                Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);
-                if (indexInBucket >= bucketCount) {
-                    matchIndexInBucket = -1;
+                Debug.Assert(comparer == null);
+
+                if (indexInBucket >= bucketCount)
                     return ref Unsafe.NullRef<Pair>();
-                }
 
-                if (typeof(K).IsValueType) {
-                    ref var pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
-                    while (true) {
-                        if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
-                            matchIndexInBucket = indexInBucket;
-                            return ref pair;
-                        }
-                        if (++indexInBucket < bucketCount)
-                            pair = ref Unsafe.Add(ref pair, 1);
-                        else
-                            break;
+                ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket),
+                    lastPair = ref Unsafe.Add(ref bucket.Pairs.Pair0, bucketCount - 1);
+                while (true) {
+                    if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
+                        matchIndexInBucket = (int)(Unsafe.ByteOffset(ref bucket.Pairs.Pair0, ref pair) / sizeof(Pair));
+                        return ref pair;
                     }
-                } else {
-                    Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
+                    if (Unsafe.AreSame(ref pair, ref lastPair))
+                        break;
+                    pair = ref Unsafe.Add(ref pair, 1);
                 }
 
-                matchIndexInBucket = -1;
                 return ref Unsafe.NullRef<Pair>();
+
             }
         }
 
@@ -197,32 +194,30 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static ref Pair FindKeyInBucket (
+            public static unsafe ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
+                Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                if (indexInBucket >= bucketCount) {
-                    matchIndexInBucket = -1;
+                if (indexInBucket >= bucketCount)
                     return ref Unsafe.NullRef<Pair>();
-                }
 
-                ref var pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket),
+                    lastPair = ref Unsafe.Add(ref bucket.Pairs.Pair0, bucketCount - 1);
                 while (true) {
                     if (comparer.Equals(needle, pair.Key)) {
-                        matchIndexInBucket = indexInBucket;
+                        matchIndexInBucket = (int)(Unsafe.ByteOffset(ref bucket.Pairs.Pair0, ref pair) / sizeof(Pair));
                         return ref pair;
                     }
-                    if (++indexInBucket < bucketCount)
-                        pair = ref Unsafe.Add(ref pair, 1);
-                    else
+                    if (Unsafe.AreSame(ref pair, ref lastPair))
                         break;
+                    pair = ref Unsafe.Add(ref pair, 1);
                 }
 
-                matchIndexInBucket = -1;
                 return ref Unsafe.NullRef<Pair>();
             }
         }

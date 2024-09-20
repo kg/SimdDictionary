@@ -354,7 +354,7 @@ namespace SimdDictionary {
                 ref var replacement = ref Unsafe.Add(ref bucket.Pairs.Pair0, replacementIndexInBucket);
                 if (!Unsafe.AreSame(ref toRemove, ref replacement)) {
                     // TODO: This is the only place in the find/insert/remove algorithms that actually needs indexInBucket.
-                    // Is there some way to optimize it out?
+                    // Can we refactor it away? The good news is RyuJIT optimizes it out entirely in find/insert.
                     bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                     bucket.SetSlot((uint)replacementIndexInBucket, 0);
                     toRemove = replacement;
