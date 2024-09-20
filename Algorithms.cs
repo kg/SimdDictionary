@@ -164,18 +164,22 @@ namespace SimdDictionary {
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
+                if (indexInBucket >= bucketCount) {
+                    matchIndexInBucket = -1;
+                    return ref Unsafe.NullRef<Pair>();
+                }
 
                 if (typeof(K).IsValueType) {
-                    // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
-                    ref var pair = ref Unsafe.NullRef<Pair>();
-                    for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
-                        // It might be good to find a way to compile this down to a cmov instead of the current branch
-                        if (Unsafe.IsNullRef(ref pair))
-                            pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                    ref var pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                    while (true) {
                         if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
                             matchIndexInBucket = indexInBucket;
                             return ref pair;
                         }
+                        if (++indexInBucket < bucketCount)
+                            pair = ref Unsafe.Add(ref pair, 1);
+                        else
+                            break;
                     }
                 } else {
                     Environment.FailFast("FindKeyInBucketWithDefaultComparer called for non-struct key type");
@@ -201,15 +205,21 @@ namespace SimdDictionary {
                 Debug.Assert(indexInBucket >= 0);
                 Debug.Assert(comparer != null);
 
-                // It's impossible to properly initialize this reference until indexInBucket has been range-checked.
-                ref var pair = ref Unsafe.NullRef<Pair>();
-                for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
-                    if (Unsafe.IsNullRef(ref pair))
-                        pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
-                    if (comparer!.Equals(needle, pair.Key)) {
+                if (indexInBucket >= bucketCount) {
+                    matchIndexInBucket = -1;
+                    return ref Unsafe.NullRef<Pair>();
+                }
+
+                ref var pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                while (true) {
+                    if (comparer.Equals(needle, pair.Key)) {
                         matchIndexInBucket = indexInBucket;
                         return ref pair;
                     }
+                    if (++indexInBucket < bucketCount)
+                        pair = ref Unsafe.Add(ref pair, 1);
+                    else
+                        break;
                 }
 
                 matchIndexInBucket = -1;
