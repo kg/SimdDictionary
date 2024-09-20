@@ -5,22 +5,25 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using SimdDictionary;
+using D = SimdDictionary.SimdDictionary<string, long>;
+using K = System.String;
 
 public static class DisasmHarness
 {
-    public static SimdDictionary<long, long> Dict = new(1);
+    public static D Dict = new(1);
+    public static K Key = (typeof(K) == typeof(string)) ? (K)(object)"0" : (K)(object)0l;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryGetValue () =>
-        Dict.TryGetValue(0, out var result);
+        Dict.TryGetValue(Key, out var result);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryAdd () =>
-        Dict.TryInsert(0, 1, SimdDictionary<long, long>.InsertMode.EnsureUnique) == SimdDictionary<long, long>.InsertResult.OkAddedNew;
+        Dict.TryInsert(Key, 1, D.InsertMode.EnsureUnique) == D.InsertResult.OkAddedNew;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryRemove () =>
-        Dict.Remove(0);
+        Dict.Remove(Key);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void Clear () => 

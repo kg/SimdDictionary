@@ -352,6 +352,8 @@ namespace SimdDictionary {
                 int replacementIndexInBucket = bucketCount - 1;
                 bucket.Count = (byte)replacementIndexInBucket;
                 ref var replacement = ref Unsafe.Add(ref bucket.Pairs.Pair0, replacementIndexInBucket);
+                // This rotate-back algorithm makes removes more expensive than if we were to just always zero the slot.
+                // But then other algorithms like insertion get more expensive, since we have to search for a zero to replace...
                 if (!Unsafe.AreSame(ref toRemove, ref replacement)) {
                     // TODO: This is the only place in the find/insert/remove algorithms that actually needs indexInBucket.
                     // Can we refactor it away? The good news is RyuJIT optimizes it out entirely in find/insert.
