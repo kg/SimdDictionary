@@ -130,11 +130,14 @@ namespace SimdDictionary {
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
+            _Buckets = newBuckets;
+            // HACK: Ensure we store a new larger bucket array before storing the fastModMultiplier for the larger size.
+            // This ensures that concurrent modification will not produce a bucket index that is too big.
+            Thread.MemoryBarrier();
 #if PRIME_BUCKET_COUNTS
             // FIXME: How do we guard this against concurrent modification?
             _fastModMultiplier = fastModMultiplier;
 #endif
-            _Buckets = newBuckets;
             // FIXME: In-place rehashing
             if ((oldBuckets != EmptyBuckets) && (_Count > 0))
                 if (!TryRehash(oldBuckets))
@@ -203,7 +206,13 @@ namespace SimdDictionary {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
 #if PRIME_BUCKET_COUNTS
-            unchecked((int)HashHelpers.FastMod(hashCode, (uint)buckets.Length, _fastModMultiplier));
+            // NOTE: If the caller observes a new _fastModMultiplier before seeing a larger buckets array,
+            //  this can overrun the end of the array.
+            unchecked((int)HashHelpers.FastMod(
+                hashCode, (uint)buckets.Length, 
+                // Volatile.Read to ensure that the load of _fastModMultiplier can't get moved before load of _Buckets
+                Volatile.Read(ref _fastModMultiplier)
+            ));
 #else
             unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
 #endif
