@@ -211,6 +211,7 @@ namespace SimdDictionary {
             unchecked((int)HashHelpers.FastMod(
                 hashCode, (uint)buckets.Length, 
                 // Volatile.Read to ensure that the load of _fastModMultiplier can't get moved before load of _Buckets
+                // This doesn't appear to generate a memory barrier or anything.
                 Volatile.Read(ref _fastModMultiplier)
             ));
 #else
@@ -234,7 +235,6 @@ namespace SimdDictionary {
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var buckets = (Span<Bucket>)_Buckets;
-            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             // I tested storing the suffix in a Vector128 to try and use a vector register, but RyuJIT assigns it to xmm6. Not sure
             //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the method
             //  calls for the comparer, etc, and the problem is that the vector has to live across method calls so it picks a nvreg.
@@ -245,7 +245,7 @@ namespace SimdDictionary {
             //  the common case (single-bucket search and then return) for slightly worse performance when cascaded
             // var searchVector = Vector128.Create(suffix);
 
-            var enumerator = new LoopingBucketEnumerator(buckets, initialBucketIndex);
+            var enumerator = new LoopingBucketEnumerator(this, hashCode);
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = enumerator.bucket.Count, 
@@ -298,12 +298,9 @@ namespace SimdDictionary {
                 return InsertResult.NeedToGrow;
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-
-            var buckets = (Span<Bucket>)_Buckets;
-            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var suffix = GetHashSuffix(hashCode);
 
-            var enumerator = new LoopingBucketEnumerator(buckets, initialBucketIndex);
+            var enumerator = new LoopingBucketEnumerator(this, hashCode);
             do {
                 int bucketCount = enumerator.bucket.Count;
                 if (mode != InsertMode.Rehashing) {
@@ -374,12 +371,9 @@ namespace SimdDictionary {
             where TKeySearcher : struct, IKeySearcher
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-
-            var buckets = (Span<Bucket>)_Buckets;
-            var initialBucketIndex = BucketIndexForHashCode(hashCode, buckets);
             var suffix = GetHashSuffix(hashCode);
 
-            var enumerator = new LoopingBucketEnumerator(buckets, initialBucketIndex);
+            var enumerator = new LoopingBucketEnumerator(this, hashCode);
             do {
                 int bucketCount = enumerator.bucket.Count,
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);

@@ -53,12 +53,9 @@ namespace SimdDictionary
 
                 var comparer = Comparer;
                 var hashCode = FinalizeHashCode(unchecked((uint)comparer.GetHashCode(key)));
-
-                var buckets = (Span<Bucket>)dictionary._Buckets;
-                var initialBucketIndex = dictionary.BucketIndexForHashCode(hashCode, buckets);
                 var suffix = GetHashSuffix(hashCode);
 
-                var enumerator = new LoopingBucketEnumerator(buckets, initialBucketIndex);
+                var enumerator = new LoopingBucketEnumerator(dictionary, hashCode);
                 do {
                     int bucketCount = enumerator.bucket.Count,
                         startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);

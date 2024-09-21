@@ -27,7 +27,9 @@ namespace SimdDictionary {
 
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public LoopingBucketEnumerator (Span<Bucket> buckets, int initialBucketIndex) {
+            public LoopingBucketEnumerator (SimdDictionary<K, V> self, uint hashCode) {
+                var buckets = (Span<Bucket>)self._Buckets;
+                var initialBucketIndex = self.BucketIndexForHashCode(hashCode, buckets);
                 Debug.Assert(buckets.Length > 0);
 
                 // The start of the array. We need to stash this so we can loop later, and we're using it below too.
@@ -71,10 +73,15 @@ namespace SimdDictionary {
                 if (Unsafe.AreSame(ref bucket, ref initialBucket))
                     return false;
 
-                // Wrapping around backwards during a retreat is uncommon, so for now, we don't optimize it.
                 if (Unsafe.AreSame(ref bucket, ref firstBucket)) {
+                    // Wrapping around backwards during a retreat is uncommon, so the field load is okay.
                     var buckets = self._Buckets;
-                    bucket = ref buckets[buckets.Length - 1];
+                    ref var newFirstBucket = ref MemoryMarshal.GetArrayDataReference(buckets);
+                    // We had to re-load our array from a field, so the array could have been replaced since we first
+                    //  loaded it and calculated firstBucket. Make sure it hasn't changed.
+                    if (!Unsafe.AreSame(ref firstBucket, ref newFirstBucket))
+                        Environment.FailFast("SimdDictionary was resized during cascade count update");
+                    bucket = ref Unsafe.Add(ref newFirstBucket, buckets.Length - 1);
                 } else
                     bucket = ref Unsafe.Subtract(ref bucket, 1);
 
