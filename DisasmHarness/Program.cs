@@ -7,4 +7,5 @@ for (int i = 0; i < 1000000; i++) {
     DisasmHarness.TryRemove();
     DisasmHarness.TryAdd();
     DisasmHarness.Clear();
+    DisasmHarness.VectorLicm(unchecked((byte)i));
 }
