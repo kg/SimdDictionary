@@ -198,6 +198,8 @@ namespace SimdDictionary {
                 ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
                 while (true) {
                     if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
+                        // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
+                        //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
                         return ref pair;
                     }

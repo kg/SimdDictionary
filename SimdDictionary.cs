@@ -234,24 +234,17 @@ namespace SimdDictionary {
             where TKeySearcher : struct, IKeySearcher 
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var buckets = (Span<Bucket>)_Buckets;
-            // I tested storing the suffix in a Vector128 to try and use a vector register, but RyuJIT assigns it to xmm6. Not sure
-            //  why *that's* happening since the vector isn't being passed to anything, maybe it's something to do with the method
-            //  calls for the comparer, etc, and the problem is that the vector has to live across method calls so it picks a nvreg.
-            var suffix = GetHashSuffix(hashCode);
-            // RyuJIT will assign this to xmm6 (a nonvolatile register) because of the potential for this method to call other
-            //  methods, which requires the existing value of xmm6 to spill to the stack upon method entry. As such, it's better
-            //  to construct the search vector on every call to FindSuffixInBucket instead. This trades improved performance on
-            //  the common case (single-bucket search and then return) for slightly worse performance when cascaded
-            // var searchVector = Vector128.Create(suffix);
-
+            // It's important to construct the enumerator before computing the suffix, to avoid stalls
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
+            // Pre-creating the search vector here using Vector128.Create is possible, but it gets stored into xmm6 and causes
+            //  an unconditional stack spill at entry, which outweighs any performance benefit from creating it early.
+            // vpbroadcastb is 1op/1c latency on most x86-64 chips, so doing it early isn't very useful either.
+            // Unfortunately in some cases Vector128.Create(suffix) gets LICM'd into xmm6 too... https://github.com/dotnet/runtime/issues/108092
+            var suffix = GetHashSuffix(hashCode);
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = enumerator.bucket.Count, 
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
-                // Checking whether startIndex < 32 would theoretically make this faster, but in practice, it doesn't
-                // Using a cmov to conditionally perform the count GetSlot also isn't faster
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
                 if (Unsafe.IsNullRef(ref pair)) {
                     if (enumerator.bucket.CascadeCount == 0)
@@ -298,9 +291,8 @@ namespace SimdDictionary {
                 return InsertResult.NeedToGrow;
 
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var suffix = GetHashSuffix(hashCode);
-
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
+            var suffix = GetHashSuffix(hashCode);
             do {
                 int bucketCount = enumerator.bucket.Count;
                 if (mode != InsertMode.Rehashing) {
@@ -371,9 +363,8 @@ namespace SimdDictionary {
             where TKeySearcher : struct, IKeySearcher
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var suffix = GetHashSuffix(hashCode);
-
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
+            var suffix = GetHashSuffix(hashCode);
             do {
                 int bucketCount = enumerator.bucket.Count,
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
