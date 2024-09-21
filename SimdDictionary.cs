@@ -287,10 +287,11 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : struct, IKeySearcher 
         {
-            if (_Count >= _GrowAtCount)
-                return InsertResult.NeedToGrow;
-
+            var needToGrow = (_Count >= _GrowAtCount);
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
+            // Pipelining: Perform the actual branch later, since in the common case we won't need to grow.
+            if (needToGrow)
+                return InsertResult.NeedToGrow;
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
             var suffix = GetHashSuffix(hashCode);
             do {

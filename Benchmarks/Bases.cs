@@ -119,6 +119,16 @@ namespace Benchmarks {
         protected abstract bool ContainsValue (TValue value);
 
         [Benchmark]
+        public void FindWhileEmpty () {
+            Dict.Clear();
+
+            for (int i = 0; i < Size; i++) {
+                if (ContainsKey(Keys[i]))
+                    throw new Exception("Found item while empty");
+            }
+        }
+
+        [Benchmark]
         public void FindExisting () {
             for (int i = 0; i < Size; i++) {
                 if (!TryGetValue(Keys[i], out var value))
