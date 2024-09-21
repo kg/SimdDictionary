@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 using System.Threading.Tasks;
 using SimdDictionary;
+using Windows.Foundation.Metadata;
 using D = SimdDictionary.SimdDictionary<string, long>;
-using K = System.String;
+using K = string;
 
 public static class DisasmHarness
 {
@@ -34,15 +36,13 @@ public static class DisasmHarness
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static byte VectorLicm (byte scalar) {
-        int result = 0, i = 0;
-        ref byte temp = ref scalar;
-iter:
+        int result = 0;
+        for (int i = 0; i < 256; i++) {
             var mask = Vector128.Equals(Vector128.Create(scalar), Vector128.Create(unchecked((byte)i)));
             if (!Comparer.Equals(mask.ToScalar(), 0))
                 result++;
-            if (++i < 256)
-                goto iter;
+        }
 
-        return temp;
+        return scalar;
     }
 }
