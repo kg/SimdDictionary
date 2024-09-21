@@ -42,7 +42,6 @@ namespace SimdDictionary {
                 initialBucket = ref bucket;
             }
 
-            // Will lazily initialize initialBucket/lastBucket at the end of your first iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Advance () {
                 // For a single-bucket array, we will always start with bucket == initialBucket == firstBucket, and remainingUntilWrap == 0.
@@ -63,6 +62,24 @@ namespace SimdDictionary {
                 }
 
                 return !Unsafe.AreSame(ref bucket, ref initialBucket);
+            }
+
+            // Will attempt to walk backwards through the buckets you previously visited.
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Retreat (SimdDictionary<K, V> self) {
+                // We can't retreat when standing on our initial bucket.
+                if (Unsafe.AreSame(ref bucket, ref initialBucket))
+                    return false;
+
+                // Wrapping around backwards during a retreat is uncommon, so for now, we don't optimize it.
+                if (Unsafe.AreSame(ref bucket, ref firstBucket)) {
+                    var buckets = self._Buckets;
+                    bucket = ref buckets[buckets.Length - 1];
+                } else
+                    bucket = ref Unsafe.Subtract(ref bucket, 1);
+
+                // It's okay if we're standing on our initial bucket right now.
+                return true;
             }
         }
 
@@ -121,31 +138,21 @@ namespace SimdDictionary {
             }
         }
 
-        // This is a slow path that only runs when a bucket overflows, so we don't need to inline it.
-        // Inlining it improves remove/insert performance on average a bit though, for remove the difference is:
-        // 1.0244x (inlined) vs 1.0991x (not inlined)
-        // The code size improvement from not inlining it appears to be quite small (930 bytes vs 933), so for now it's inlined.
+        // In the common case this method never runs, but inlining allows some smart stuff to happen in terms of stack size and
+        //  register usage.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void AdjustCascadeCounts (
-            // We just give up and pass the span here because it's not possible to keep firstBucket and lastBucket on the stack
-            //  for the whole body of the insert/remove methods, and in the common case this method never runs.
-            Span<Bucket> buckets, ref Bucket bucket, ref Bucket initialBucket,
-            bool increase
+        internal void AdjustCascadeCounts (
+            LoopingBucketEnumerator enumerator, bool increase
         ) {
-            ref var firstBucket = ref MemoryMarshal.GetReference(buckets);
             // We may have cascaded out of a previous bucket; if so, scan backwards and update
             //  the cascade count for every bucket we previously scanned.
-            while (!Unsafe.AreSame(ref bucket, ref initialBucket)) {
+            while (enumerator.Retreat(this)) {
                 // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
-                bucket = ref Unsafe.Subtract(ref bucket, 1);
-                if (Unsafe.IsAddressLessThan(ref bucket, ref firstBucket))
-                    bucket = ref Unsafe.Add(ref firstBucket, buckets.Length);
-
-                var cascadeCount = bucket.CascadeCount;
+                var cascadeCount = enumerator.bucket.CascadeCount;
                 if (increase) {
                     // Never overflow (wrap around) the counter
                     if (cascadeCount < 255)
-                        bucket.CascadeCount = (byte)(cascadeCount + 1);
+                        enumerator.bucket.CascadeCount = (byte)(cascadeCount + 1);
                 } else {
                     if (cascadeCount == 0)
                         Environment.FailFast("Corrupted dictionary bucket cascade slot");
@@ -153,7 +160,7 @@ namespace SimdDictionary {
                     //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
                     // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
                     else if (cascadeCount < 255)
-                        bucket.CascadeCount = (byte)(cascadeCount - 1);
+                        enumerator.bucket.CascadeCount = (byte)(cascadeCount - 1);
                 }
             }
         }
