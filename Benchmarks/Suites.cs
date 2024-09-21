@@ -205,4 +205,38 @@ namespace Benchmarks {
             }
         }
     }
+
+    public class ClearingWithRefs {
+        const int Size = 40960;
+
+        public Dictionary<string, string> BCL = new (Size);
+        public SimdDictionary<string, string> SIMD = new (Size);
+        public List<string> Strings = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            for (int i = 0; i < Size; i++) {
+                var s = i.ToString();
+                Strings.Add(s);
+            }
+        }
+
+        [Benchmark]
+        public void BCLClearAndRefill () {
+            BCL.Clear();
+            for (int i = 0; i < Size; i++) {
+                var s = Strings[i];
+                BCL.Add(s, s);
+            }
+        }
+
+        [Benchmark]
+        public void SIMDClearAndRefill () {
+            SIMD.Clear();
+            for (int i = 0; i < Size; i++) {
+                var s = Strings[i];
+                SIMD.Add(s, s);
+            }
+        }
+    }
 }

@@ -7,6 +7,9 @@
 // #define PERMUTE_HASH_CODES
 // Walk buckets instead of Array.Clear. Improves clear performance when mostly empty, slight regression when full
 #define SMART_CLEAR
+// Use an unrolled slot-clearing routine instead of just doing Pairs = default. Unclear whether this is better.
+// Probably *is* better for keys or values that are very big and contain references.
+#define UNROLLED_CLEAR_WITH_REFS
 
 using System;
 using System.Collections;
@@ -475,16 +478,37 @@ namespace SimdDictionary {
         internal struct ClearCallback : IBucketCallback {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Bucket (ref Bucket bucket) {
-                if (bucket.Count == 0) {
-                    // This might be locked to 255 if we previously had a ton of collisions, so zero it and then exit
+                int c = bucket.Count;
+                if (c == 0) {
                     bucket.CascadeCount = 0;
                     return true;
                 }
 
-                if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>())
-                    bucket = default;
-                else
-                    bucket.Suffixes = default;
+                bucket.Suffixes = default;
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>()) {
+                    // Performs a method call for the clear instead of being inlined
+                    // var s = MemoryMarshal.CreateSpan(ref bucket.Pairs.Pair0, BucketSizeI);
+                    // s.Clear();
+#if UNROLLED_CLEAR_WITH_REFS
+                    ref var pair = ref bucket.Pairs.Pair0;
+                    // 4-wide unrolled bucket clear
+                    while (c >= 4) {
+                        pair = default;
+                        Unsafe.Add(ref pair, 1) = default;
+                        Unsafe.Add(ref pair, 2) = default;
+                        Unsafe.Add(ref pair, 3) = default;
+                        pair = ref Unsafe.Add(ref pair, 4);
+                        c -= 4;
+                    }
+                    while (c != 0) {
+                        pair = default;
+                        pair = ref Unsafe.Add(ref pair, 1);
+                        c--;
+                    }
+#else
+                    bucket.Pairs = default;
+#endif
+                }
 
                 return true;
             }
