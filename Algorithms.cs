@@ -20,7 +20,11 @@ namespace SimdDictionary {
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
         internal ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
+            // Right now it's one field too large to fit onto the stack in the find loop when using a comparer instance... need to fix that.
+            // However, the most obvious fix (initializing lastBucket early) regresses performance too much.
+            public int length;
             public ref Bucket firstBucket, bucket;
+            // These are NullRef until the start of your second iteration.
             public ref Bucket lastBucket, initialBucket;
 
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
@@ -29,21 +33,26 @@ namespace SimdDictionary {
                 Debug.Assert(buckets.Length > 0);
 
                 firstBucket = ref MemoryMarshal.GetReference(buckets);
-                // Eagerly initializing this adds an extra imul to every lookup, but it optimizes out a stack spill
-                //  in the lookup loop when using an IEqualityComparer instance, so it's worth doing it overall.
-                // This is basically trading a win on object keys for a perf hit on VT keys w/default comparer.
-                // According to Egor, ~75% of dictionaries use string keys.
-                lastBucket = ref Unsafe.Add(ref firstBucket, buckets.Length - 1);
+                length = buckets.Length;
+
+                // Null-initialize these refs and then initialize them on demand only if we have to check multiple buckets.
+                // This increases code size a bit, but moves a bunch of code off of the hot path.
+                lastBucket = ref Unsafe.NullRef<Bucket>();
+                initialBucket = ref Unsafe.NullRef<Bucket>();
                 // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
                 // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
-                Debug.Assert(initialBucketIndex < buckets.Length);
+                Debug.Assert(initialBucketIndex < length);
                 bucket = ref Unsafe.Add(ref firstBucket, initialBucketIndex);
-                initialBucket = ref bucket;
             }
 
             // Will lazily initialize initialBucket/lastBucket at the end of your first iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Advance () {
+                if (Unsafe.IsNullRef(ref initialBucket)) {
+                    initialBucket = ref bucket;
+                    lastBucket = ref Unsafe.Add(ref firstBucket, length - 1);
+                }
+
                 if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
                     bucket = ref firstBucket;
                 } else {
@@ -203,6 +212,8 @@ namespace SimdDictionary {
                     return ref Unsafe.NullRef<Pair>();
 
                 ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                // FIXME: This loop spills two values to/from the stack every iteration, and it's not clear which.
+                // The ValueType-with-default-comparer one doesn't.
                 while (true) {
                     if (comparer.Equals(needle, pair.Key)) {
                         matchIndexInBucket = bucketCount - count;
