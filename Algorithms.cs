@@ -20,43 +20,46 @@ namespace SimdDictionary {
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
         internal ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
-            // Right now it's one field too large to fit onto the stack in the find loop when using a comparer instance... need to fix that.
-            // However, the most obvious fix (initializing lastBucket early) regresses performance too much.
-            public int length;
+            // The current size is BARELY small enough for TryGetValue to run without touching stack. TryInsert for reftypes still touches stack.
+            public int remainingUntilWrap;
             public ref Bucket firstBucket, bucket;
-            // These are NullRef until the start of your second iteration.
-            public ref Bucket lastBucket, initialBucket;
+            public ref Bucket initialBucket;
 
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public LoopingBucketEnumerator (Span<Bucket> buckets, int initialBucketIndex) {
                 Debug.Assert(buckets.Length > 0);
 
+                // The start of the array. We need to stash this so we can loop later, and we're using it below too.
                 firstBucket = ref MemoryMarshal.GetReference(buckets);
-                length = buckets.Length;
+                // The number of buckets we can check before hitting the end, at which point we need to loop back to firstBucket.
+                remainingUntilWrap = buckets.Length - initialBucketIndex - 1;
 
-                // Null-initialize these refs and then initialize them on demand only if we have to check multiple buckets.
-                // This increases code size a bit, but moves a bunch of code off of the hot path.
-                lastBucket = ref Unsafe.NullRef<Bucket>();
-                initialBucket = ref Unsafe.NullRef<Bucket>();
                 // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
                 // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
-                Debug.Assert(initialBucketIndex < length);
+                Debug.Assert(initialBucketIndex < buckets.Length);
                 bucket = ref Unsafe.Add(ref firstBucket, initialBucketIndex);
+                initialBucket = ref bucket;
             }
 
             // Will lazily initialize initialBucket/lastBucket at the end of your first iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Advance () {
-                if (Unsafe.IsNullRef(ref initialBucket)) {
-                    initialBucket = ref bucket;
-                    lastBucket = ref Unsafe.Add(ref firstBucket, length - 1);
-                }
+                // For a single-bucket array, we will always start with bucket == initialBucket == firstBucket, and remainingUntilWrap == 0.
+                // This method will then set bucket = firstBucket and remainingUntilWrap = int.MaxValue.
+                // bucket will then == initialBucket, so we return false.
+                // For larger arrays, we will loop around when we hit the end, and continue until we reach the bucket we started at.
 
-                if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                // Technically it should never be possible for this to become negative, but if we were initialized with a bad
+                //  bucket index, it could be. So we might as well do <= even if that might generate an extra instruction.
+                if (remainingUntilWrap <= 0) {
                     bucket = ref firstBucket;
+                    // Now that we've wrapped around, we will encounter initialBucket before we ever overrun the end of the 
+                    //  array, so it's safe for remainingUntilWrap to be int.MaxValue.
+                    remainingUntilWrap = int.MaxValue;
                 } else {
                     bucket = ref Unsafe.Add(ref bucket, 1);
+                    --remainingUntilWrap;
                 }
 
                 return !Unsafe.AreSame(ref bucket, ref initialBucket);
@@ -124,16 +127,19 @@ namespace SimdDictionary {
         // The code size improvement from not inlining it appears to be quite small (930 bytes vs 933), so for now it's inlined.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void AdjustCascadeCounts (
-            ref Bucket bucket, ref Bucket firstBucket, ref Bucket initialBucket, ref Bucket lastBucket,
+            // We just give up and pass the span here because it's not possible to keep firstBucket and lastBucket on the stack
+            //  for the whole body of the insert/remove methods, and in the common case this method never runs.
+            Span<Bucket> buckets, ref Bucket bucket, ref Bucket initialBucket,
             bool increase
         ) {
+            ref var firstBucket = ref MemoryMarshal.GetReference(buckets);
             // We may have cascaded out of a previous bucket; if so, scan backwards and update
             //  the cascade count for every bucket we previously scanned.
             while (!Unsafe.AreSame(ref bucket, ref initialBucket)) {
                 // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
                 bucket = ref Unsafe.Subtract(ref bucket, 1);
                 if (Unsafe.IsAddressLessThan(ref bucket, ref firstBucket))
-                    bucket = ref lastBucket;
+                    bucket = ref Unsafe.Add(ref firstBucket, buckets.Length);
 
                 var cascadeCount = bucket.CascadeCount;
                 if (increase) {

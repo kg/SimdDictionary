@@ -325,8 +325,8 @@ namespace SimdDictionary {
                 if (TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, key, value)) {
                     // If the loop control variables are populated, that means we had to try to insert into multiple buckets.
                     // Increase the cascade counters for the buckets we checked before this one.
-                    if (!Unsafe.IsNullRef(ref enumerator.initialBucket))
-                        AdjustCascadeCounts(ref enumerator.bucket, ref enumerator.firstBucket, ref enumerator.initialBucket, ref enumerator.lastBucket, true);
+                    if (!Unsafe.AreSame(ref enumerator.bucket, ref enumerator.initialBucket))
+                        AdjustCascadeCounts(buckets, ref enumerator.bucket, ref enumerator.initialBucket, true);
 
                     return InsertResult.OkAddedNew;
                 }
@@ -392,8 +392,8 @@ namespace SimdDictionary {
                     RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount, ref pair);
                     // If the loop control variables are populated, we had to scan multiple buckets to find the item we just
                     //  removed, so go back and decrement the cascade counters.
-                    if (!Unsafe.IsNullRef(ref enumerator.initialBucket))
-                        AdjustCascadeCounts(ref enumerator.bucket, ref enumerator.firstBucket, ref enumerator.initialBucket, ref enumerator.lastBucket, false);
+                    if (!Unsafe.AreSame(ref enumerator.bucket, ref enumerator.initialBucket))
+                        AdjustCascadeCounts(buckets, ref enumerator.bucket, ref enumerator.initialBucket, false);
                     return true;
                 }
 
