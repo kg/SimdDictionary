@@ -263,7 +263,7 @@ namespace Benchmarks {
             for (int i = 0; i < Size; i++) {
                 var s = Strings[i];
                 if (!SIMD.TryGetValue(s, out var value) || (value != i))
-                    throw new Exception();
+                    Environment.FailFast("Failed");
             }
         }
 
@@ -272,7 +272,7 @@ namespace Benchmarks {
             for (int i = 0; i < Size; i++) {
                 var s = Strings[i];
                 if (!BCL.TryGetValue(s, out var value) || (value != i))
-                    throw new Exception();
+                    Environment.FailFast("Failed");
             }
         }
     }
