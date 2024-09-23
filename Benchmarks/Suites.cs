@@ -239,4 +239,41 @@ namespace Benchmarks {
             }
         }
     }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class StringLookup {
+        const int Size = 40960;
+
+        public Dictionary<string, long> BCL = new (Size);
+        public SimdDictionary<string, long> SIMD = new (Size);
+        public List<string> Strings = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            for (int i = 0; i < Size; i++) {
+                var s = i.ToString();
+                Strings.Add(s);
+                BCL.Add(s, i);
+                SIMD.Add(s, i);
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingSIMD () {
+            for (int i = 0; i < Size; i++) {
+                var s = Strings[i];
+                if (!SIMD.TryGetValue(s, out var value) || (value != i))
+                    throw new Exception();
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingBCL () {
+            for (int i = 0; i < Size; i++) {
+                var s = Strings[i];
+                if (!BCL.TryGetValue(s, out var value) || (value != i))
+                    throw new Exception();
+            }
+        }
+    }
 }
