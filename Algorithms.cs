@@ -52,7 +52,7 @@ namespace SimdDictionary {
                 // For larger arrays, we will loop around when we hit the end, and continue until we reach the bucket we started at.
 
                 // Technically it should never be possible for this to become negative, but if we were initialized with a bad
-                //  bucket index, it could be. So we might as well do <= even if that might generate an extra instruction.
+                //  bucket index, it could be. In this case <= and == produce equivalently fast code anyway.
                 if (remainingUntilWrap <= 0) {
                     bucket = ref firstBucket;
                     // Now that we've wrapped around, we will encounter initialBucket before we ever overrun the end of the 

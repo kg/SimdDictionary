@@ -12,19 +12,20 @@ using K = string;
 public static class DisasmHarness
 {
     public static D Dict = new(1);
-    public static K Key = (typeof(K) == typeof(string)) ? (K)(object)"0" : (K)(object)0l;
+    public static K MissingKey = (typeof(K) == typeof(string)) ? (K)(object)"0" : (K)(object)0L,
+        PresentKey = (typeof(K) == typeof(string)) ? (K)(object)"1" : (K)(object)1L;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool TryGetValue () =>
-        Dict.TryGetValue(Key, out var result);
+    public static bool TryGetValue (int i) =>
+        Dict.TryGetValue((i % 2) == 0 ? MissingKey : PresentKey, out var result);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryAdd () =>
-        Dict.TryInsert(Key, 1, D.InsertMode.EnsureUnique) == D.InsertResult.OkAddedNew;
+        Dict.TryInsert(PresentKey, 1, D.InsertMode.EnsureUnique) == D.InsertResult.OkAddedNew;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool TryRemove () =>
-        Dict.Remove(Key);
+    public static bool TryRemove (int i) =>
+        Dict.Remove((i % 2) == 0 ? MissingKey : PresentKey);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void Clear () => 
