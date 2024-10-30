@@ -98,12 +98,11 @@ namespace SimdDictionary {
 
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
             var buckets = (Span<Bucket>)_Buckets;
-            var values = (Span<V>)_Values;
             ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
                 lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
 
             while (true) {
-                var ok = callback.Bucket(ref bucket, values);
+                var ok = callback.Bucket(ref bucket);
                 if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket))
                     bucket = ref Unsafe.Add(ref bucket, 1);
                 else
@@ -190,7 +189,7 @@ namespace SimdDictionary {
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);
-                Debug.Assert(comparer == null);
+                Debug.Assert(comparer != null);
 
                 int count = bucketCount - indexInBucket;
                 if (count <= 0)

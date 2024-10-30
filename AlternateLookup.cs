@@ -31,7 +31,7 @@ namespace SimdDictionary
                     ref var pair = ref FindKey(key);
                     if (Unsafe.IsNullRef(ref pair))
                         throw new KeyNotFoundException($"Key {key} not found");
-                    return Dictionary._Values[pair.ValueIndex];
+                    return pair.Value;
                 }
             }
 
@@ -41,7 +41,7 @@ namespace SimdDictionary
                     value = default!;
                     return false;
                 } else {
-                    value = Dictionary._Values[pair.ValueIndex];
+                    value = pair.Value;
                     return true;
                 }
             }
