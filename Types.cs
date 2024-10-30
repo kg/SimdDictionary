@@ -22,7 +22,7 @@ namespace SimdDictionary {
 
         internal struct Pair {
             public K Key;
-            public V Value;
+            public int ValueIndex;
         }
         
         // This size must match or exceed BucketSizeI
@@ -74,14 +74,15 @@ namespace SimdDictionary {
             EnsureUnique,
             // Overwrite the value if a matching key is found
             OverwriteValue,
-            // Don't scan for existing matches before inserting into the bucket. This is only
-            //  safe to do when copying an existing dictionary or rehashing an existing dictionary
-            Rehashing
+            // An existing value with this key is guaranteed not to be present
+            Rehashing,
         }
 
         public enum InsertResult {
             // The specified key did not exist in the dictionary, and a key/value pair was inserted
             OkAddedNew,
+            // We found an existing item and returned its valueindex so you can overwrite it
+            ReturnedExistingIndex,
             // The specified key was found in the dictionary and we overwrote the value
             OkOverwroteExisting,
             // The dictionary is full and needs to be grown before you can perform an insert
@@ -107,7 +108,7 @@ namespace SimdDictionary {
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
         internal interface IBucketCallback {
             // Return false to stop iteration
-            abstract bool Bucket (ref Bucket bucket);
+            abstract bool Bucket (ref Bucket bucket, Span<V> values);
         }
     }
 }
