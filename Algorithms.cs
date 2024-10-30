@@ -98,12 +98,12 @@ namespace SimdDictionary {
 
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
             var buckets = (Span<Bucket>)_Buckets;
-            var values = (Span<V>)_Values;
+            var entries = (Span<Pair>)_Entries;
             ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
                 lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
 
             while (true) {
-                var ok = callback.Bucket(ref bucket, values);
+                var ok = callback.Bucket(ref bucket, entries);
                 if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket))
                     bucket = ref Unsafe.Add(ref bucket, 1);
                 else
@@ -183,9 +183,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static unsafe ref Pair FindKeyInBucket (
+            public static unsafe int FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
+                [UnscopedRef] ref Bucket bucket, Span<Pair> entries, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
@@ -194,20 +194,21 @@ namespace SimdDictionary {
 
                 int count = bucketCount - indexInBucket;
                 if (count <= 0)
-                    return ref Unsafe.NullRef<Pair>();
+                    return -1;
 
-                ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                ref int index = ref Unsafe.Add(ref bucket.Indices.Index0, indexInBucket);
                 while (true) {
+                    ref var pair = ref entries[index];
                     if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
-                        return ref pair;
+                        return index;
                     }
 
                     // NOTE: --count <= 0 produces an extra 'test' opcode
                     if (--count == 0)
-                        return ref Unsafe.NullRef<Pair>();
+                        return -1;
                     else
                         pair = ref Unsafe.Add(ref pair, 1);
                 }
@@ -221,9 +222,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static unsafe ref Pair FindKeyInBucket (
+            public static unsafe int FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
+                [UnscopedRef] ref Bucket bucket, Span<Pair> entries, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
@@ -232,22 +233,21 @@ namespace SimdDictionary {
 
                 int count = bucketCount - indexInBucket;
                 if (count <= 0)
-                    return ref Unsafe.NullRef<Pair>();
+                    return -1;
 
-                ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
-                // FIXME: This loop spills two values to/from the stack every iteration, and it's not clear which.
-                // The ValueType-with-default-comparer one doesn't.
+                ref int index = ref Unsafe.Add(ref bucket.Indices.Index0, indexInBucket);
                 while (true) {
+                    ref var pair = ref entries[index];
                     if (comparer.Equals(needle, pair.Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
-                        return ref pair;
+                        return index;
                     }
 
                     // NOTE: --count <= 0 produces an extra 'test' opcode
                     if (--count == 0)
-                        return ref Unsafe.NullRef<Pair>();
+                        return -1;
                     else
                         pair = ref Unsafe.Add(ref pair, 1);
                 }

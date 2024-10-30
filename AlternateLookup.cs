@@ -11,6 +11,8 @@ namespace SimdDictionary
     }
 
     public partial class SimdDictionary<K, V> {
+        // FIXME
+        /*
         public readonly struct AlternateLookup<TAlternateKey>
             where TAlternateKey : notnull { // fixme: allows ref struct
 
@@ -94,5 +96,6 @@ namespace SimdDictionary
                 return ref Unsafe.NullRef<Pair>();
             }
         }
+        */
     }
 }

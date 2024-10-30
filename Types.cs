@@ -22,22 +22,19 @@ namespace SimdDictionary {
 
         internal struct Pair {
             public K Key;
-            public int ValueIndex;
+            public V Value;
         }
         
         // This size must match or exceed BucketSizeI
         [InlineArray(14)]
-        internal struct InlinePairArray {
-            public Pair Pair0;
+        internal struct InlineIndexArray {
+            public int Index0;
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 16)]
         internal struct Bucket {
             public Vector128<byte> Suffixes;
-            public InlinePairArray Pairs;
-            // For 8-byte keys + values this makes a bucket 256 bytes, changing the native code for the lookup
-            //  buckets[index] from an imul to a shift
-            // public Vector128<byte> Padding;
+            public InlineIndexArray Indices;
 
             public ref byte Count {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -81,8 +78,6 @@ namespace SimdDictionary {
         public enum InsertResult {
             // The specified key did not exist in the dictionary, and a key/value pair was inserted
             OkAddedNew,
-            // We found an existing item and returned its valueindex so you can overwrite it
-            ReturnedExistingIndex,
             // The specified key was found in the dictionary and we overwrote the value
             OkOverwroteExisting,
             // The dictionary is full and needs to be grown before you can perform an insert
@@ -96,9 +91,11 @@ namespace SimdDictionary {
         // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
         //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
         internal interface IKeySearcher {
-            static abstract ref Pair FindKeyInBucket (
+            static abstract int FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, int startIndexInBucket, int bucketCount,
+                [UnscopedRef] ref Bucket bucket, 
+                Span<Pair> pairs, 
+                int startIndexInBucket, int bucketCount,
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             );
 
@@ -108,7 +105,7 @@ namespace SimdDictionary {
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
         internal interface IBucketCallback {
             // Return false to stop iteration
-            abstract bool Bucket (ref Bucket bucket, Span<V> values);
+            abstract bool Bucket (ref Bucket bucket, Span<Pair> entries);
         }
     }
 }

@@ -112,6 +112,8 @@ namespace Benchmarks {
     public class SimdMemoryUsage : MemoryUsage<SimdDictionary<TKey, TValue>> {
     }
 
+    // FIXME
+    /*
     [MemoryDiagnoser()]
     [DisassemblyDiagnoser()]
     public class SimdAlternateLookup {
@@ -205,6 +207,7 @@ namespace Benchmarks {
             }
         }
     }
+    */
 
     public class ClearingWithRefs {
         const int Size = 40960;

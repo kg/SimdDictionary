@@ -137,38 +137,41 @@ namespace SimdDictionary {
         }
 
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>>, IDictionaryEnumerator {
-            private int _bucketIndex, _valueIndexLocal;
+            private int _bucketIndex, _entryIndexLocal;
             private Bucket _currentBucket;
             private Bucket[] _buckets;
-            private V[] _values;
+            private Pair[] _entries;
+            private int[] _freeList;
+            private int _freeListCount;
+
+            private ref Pair CurrentPair {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => ref _entries[_currentBucket.Indices[_entryIndexLocal]];
+            }
 
             public K CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get {
-                    return _currentBucket.Pairs[_valueIndexLocal].Key;
-                }
+                get => CurrentPair.Key;
             }
 
             public V CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get {
-                    return _values[_currentBucket.Pairs[_valueIndexLocal].ValueIndex];
-                }
+                get => CurrentPair.Value;
             }
 
             public KeyValuePair<K, V> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
-                    ref var pair = ref _currentBucket.Pairs[_valueIndexLocal];
-                    return new KeyValuePair<K, V>(pair.Key, _values[pair.ValueIndex]);
+                    ref var pair = ref CurrentPair;
+                    return new KeyValuePair<K, V>(pair.Key, pair.Value);
                 }
             }
             object IEnumerator.Current => Current;
 
             DictionaryEntry IDictionaryEnumerator.Entry {
                 get {
-                    ref var pair = ref _currentBucket.Pairs[_valueIndexLocal];
-                    return new DictionaryEntry(pair.Key, _values[pair.ValueIndex]);
+                    ref var pair = ref CurrentPair;
+                    return new DictionaryEntry(pair.Key, pair.Value);
                 }
             }
 
@@ -178,9 +181,11 @@ namespace SimdDictionary {
 
             public Enumerator (SimdDictionary<K, V> dictionary) {
                 _bucketIndex = -1;
-                _valueIndexLocal = BucketSizeI;
+                _entryIndexLocal = BucketSizeI;
                 _buckets = dictionary._Buckets;
-                _values = dictionary._Values;
+                _entries = dictionary._Entries;
+                _freeListCount = dictionary._FreeListCount;
+                _freeList = dictionary._FreeList;
             }
 
             public void Dispose () {
@@ -188,23 +193,24 @@ namespace SimdDictionary {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool MoveNext () {
-                _valueIndexLocal++;
+                _entryIndexLocal++;
 
+                // FIXME: Iterate in entries order, skipping entries on the freelist
                 while (_bucketIndex < _buckets.Length) {
                     var count = _currentBucket.Count;
-                    if (_valueIndexLocal >= count) {
-                        _valueIndexLocal = 0;
+                    if (_entryIndexLocal >= count) {
+                        _entryIndexLocal = 0;
                         _bucketIndex++;
                         if (_bucketIndex >= _buckets.Length)
                             return false;
                         _currentBucket = _buckets[_bucketIndex];
                     }
 
-                    while (_valueIndexLocal < count) {
-                        var suffix = _currentBucket.GetSlot(_valueIndexLocal);
+                    while (_entryIndexLocal < count) {
+                        var suffix = _currentBucket.GetSlot(_entryIndexLocal);
                         if (suffix != 0)
                             return true;
-                        _valueIndexLocal++;
+                        _entryIndexLocal++;
                     }
                 }
 
@@ -213,7 +219,7 @@ namespace SimdDictionary {
 
             public void Reset () {
                 _bucketIndex = -1;
-                _valueIndexLocal = BucketSizeI;
+                _entryIndexLocal = BucketSizeI;
             }
         }
     }
