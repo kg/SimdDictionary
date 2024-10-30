@@ -63,7 +63,10 @@ namespace SimdDictionary {
                     --remainingUntilWrap;
                 }
 
-                return !Unsafe.AreSame(ref bucket, ref initialBucket);
+                if (Unsafe.AreSame(ref bucket, ref initialBucket))
+                    return false;
+                else
+                    return true;
             }
 
             // Will attempt to walk backwards through the buckets you previously visited.
@@ -210,7 +213,7 @@ namespace SimdDictionary {
                     if (--count == 0)
                         return -1;
                     else
-                        pair = ref Unsafe.Add(ref pair, 1);
+                        index = ref Unsafe.Add(ref index, 1);
                 }
             }
         }
@@ -249,7 +252,7 @@ namespace SimdDictionary {
                     if (--count == 0)
                         return -1;
                     else
-                        pair = ref Unsafe.Add(ref pair, 1);
+                        index = ref Unsafe.Add(ref index, 1);
                 }
             }
         }

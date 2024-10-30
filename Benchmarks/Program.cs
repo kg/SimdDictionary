@@ -39,25 +39,30 @@ namespace Benchmarks {
             Console.WriteLine("Running self-test...");
 
             var rng = new Random(1234);
-            int c = 16 * 1024, 
-                d = 4096 * (Debugger.IsAttached ? 1 : 5), 
-                e = 1024 * (Debugger.IsAttached ? 1 : 5);
+            int c = 16 * 1024,
+                d = 4096 * (Debugger.IsAttached ? 1 : 5),
+                e = 1024 * (Debugger.IsAttached ? 1 : 5),
+                f = 16;
             List<TKey> keys = new(c),
                 unusedKeys = new(c);
             List<TValue> values = new (c);
 
             List<TailCollider> tcs = new();
             var tcTest = new SimdDictionary<TailCollider, int>();
-            for (int i = 0; i < 40960; i++) {
+            for (int i = 0; i < f; i++) {
                 var tc = new TailCollider();
                 tcs.Add(tc);
                 tcTest.Add(tc, i);
             }
+            if (tcTest.Count != tcs.Count)
+                throw new Exception();
             for (int i = 0; i < tcs.Count; i++) {
                 if (tcTest[tcs[i]] != i)
                     throw new Exception();
             }
             tcTest.Clear();
+            if (tcTest.Count != 0)
+                throw new Exception();
             for (int i = 0; i < tcs.Count; i++) {
                 if (tcTest.TryGetValue(tcs[i], out _))
                     throw new Exception();

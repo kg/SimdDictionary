@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Text;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V>
@@ -20,9 +21,14 @@ namespace SimdDictionary {
             CountSlot = 14,
             CascadeSlot = 15;
 
+        [DebuggerDisplay("{Key}, {Value}")]
         internal struct Pair {
             public K Key;
             public V Value;
+
+            public bool IsDefault =>
+                EqualityComparer<K>.Default.Equals(Key, default) &&
+                    EqualityComparer<V>.Default.Equals(Value, default);
         }
         
         // This size must match or exceed BucketSizeI
@@ -35,6 +41,17 @@ namespace SimdDictionary {
         internal struct Bucket {
             public Vector128<byte> Suffixes;
             public InlineIndexArray Indices;
+
+            public static readonly Bucket Empty;
+
+            static Bucket () {
+                var empty = default(Bucket);
+                for (int i = 0; i < BucketSizeI; i++)
+                    empty.Indices[i] = -1;
+                Empty = empty;
+            }
+
+            internal byte _Count => Count;
 
             public ref byte Count {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -64,6 +81,21 @@ namespace SimdDictionary {
                 // index &= 15;
                 Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index) = value;
             }
+
+            public override string ToString () {
+                var sb = new StringBuilder();
+                sb.Append($"#{Count} Cascaded={CascadeCount} Suffixes={Suffixes} Indices=");
+                for (int i = 0; i < Count; i++) {
+                    if (i > 0)
+                        sb.Append(',');
+                    var idx = Indices[i];
+                    if (idx == -1)
+                        sb.Append("empty");
+                    else
+                        sb.Append(idx);
+                }
+                return sb.ToString();
+            }
         }
 
         public enum InsertMode {
@@ -71,8 +103,6 @@ namespace SimdDictionary {
             EnsureUnique,
             // Overwrite the value if a matching key is found
             OverwriteValue,
-            // An existing value with this key is guaranteed not to be present
-            Rehashing,
         }
 
         public enum InsertResult {
