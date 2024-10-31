@@ -137,16 +137,12 @@ namespace SimdDictionary {
         }
 
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>>, IDictionaryEnumerator {
-            private int _bucketIndex, _entryIndexLocal;
-            private Bucket _currentBucket;
-            private Bucket[] _buckets;
-            private Pair[] _entries;
-            private int[] _freeList;
-            private int _freeListCount;
+            private Entry[] _entries;
+            private int _entryIndex, _entryCount;
 
-            private ref Pair CurrentPair {
+            private ref Entry CurrentPair {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => ref _entries[_currentBucket.Indices[_entryIndexLocal]];
+                get => ref _entries[_entryIndex];
             }
 
             public K CurrentKey {
@@ -180,12 +176,9 @@ namespace SimdDictionary {
             object? IDictionaryEnumerator.Value => CurrentValue;
 
             public Enumerator (SimdDictionary<K, V> dictionary) {
-                _bucketIndex = -1;
-                _entryIndexLocal = BucketSizeI;
-                _buckets = dictionary._Buckets;
                 _entries = dictionary._Entries;
-                _freeListCount = dictionary._FreeListCount;
-                _freeList = dictionary._FreeList;
+                _entryIndex = -1;
+                _entryCount = dictionary._Count;
             }
 
             public void Dispose () {
@@ -193,33 +186,22 @@ namespace SimdDictionary {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool MoveNext () {
-                _entryIndexLocal++;
+                _entryIndex++;
 
-                // FIXME: Iterate in entries order, skipping entries on the freelist
-                while (_bucketIndex < _buckets.Length) {
-                    var count = _currentBucket.Count;
-                    if (_entryIndexLocal >= count) {
-                        _entryIndexLocal = 0;
-                        _bucketIndex++;
-                        if (_bucketIndex >= _buckets.Length)
-                            return false;
-                        _currentBucket = _buckets[_bucketIndex];
-                    }
-
-                    while (_entryIndexLocal < count) {
-                        var suffix = _currentBucket.GetSlot(_entryIndexLocal);
-                        if (suffix != 0)
-                            return true;
-                        _entryIndexLocal++;
-                    }
+                while (_entryIndex < _entryCount) {
+                    ref var entry = ref _entries[_entryIndex];
+                    var nextFreeSlot = entry.NextFreeSlot;
+                    if ((nextFreeSlot >= 0) || (nextFreeSlot == FreeListIndex_EndOfFreeList))
+                        _entryIndex++;
+                    else
+                        return true;
                 }
 
                 return false;
             }
 
             public void Reset () {
-                _bucketIndex = -1;
-                _entryIndexLocal = BucketSizeI;
+                _entryIndex = -1;
             }
         }
     }

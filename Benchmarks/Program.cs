@@ -132,8 +132,11 @@ namespace Benchmarks {
                 if (copy.Count != 0)
                     throw new Exception();
 
-                for (int i = 0; i < c; i++)
+                for (int i = 0; i < c; i++) {
                     copy.Add(keys[i], values[i]);
+                    if (!copy.TryGetValue(keys[i], out _))
+                        throw new Exception();
+                }
 
                 for (int i = 0; i < c; i++)
                     if (!copy.TryGetValue(keys[i], out _))

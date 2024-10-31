@@ -27,7 +27,9 @@ namespace SimdDictionary {
         private ulong _fastModMultiplier;
 #endif
 
-        private const int MinimumEntryCapacity = 6;
+        private const int MinimumEntryCapacity = 6,
+            FreeListIndex_Occupied = -1,
+            FreeListIndex_EndOfFreeList = int.MaxValue;
 
         // TODO: Make these reference types initialized on demand / add cache fields for the accessors that box them.
         public readonly KeyCollection Keys;
@@ -36,7 +38,7 @@ namespace SimdDictionary {
         // It's important for an empty dictionary to have both count and growatcount be 0
         private int _Count = 0, 
             _GrowAtCount = 0,
-            _FreeListCount = 0;
+            _FreeListStart = -2;
 
 #pragma warning disable CA1825
         // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
@@ -44,13 +46,11 @@ namespace SimdDictionary {
         //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
         //  we're empty.
         private static readonly Bucket[] EmptyBuckets = [ Bucket.Empty ];
-        private static readonly Pair[] EmptyEntries = new Pair[1];
-        private static readonly int[] EmptyFreeList = [ -1 ];
+        private static readonly Entry[] EmptyEntries = [ Entry.Empty ];
 #pragma warning restore CA1825
 
         private Bucket[] _Buckets = EmptyBuckets;
-        private Pair[] _Entries = EmptyEntries;
-        private int[] _FreeList = EmptyFreeList;
+        private Entry[] _Entries = EmptyEntries;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -83,17 +83,15 @@ namespace SimdDictionary {
             Comparer = source.Comparer;
             _Count = source._Count;
             _GrowAtCount = source._GrowAtCount;
-            _FreeListCount = source._FreeListCount;
+            _FreeListStart = source._FreeListStart;
 #if PRIME_BUCKET_COUNTS
             _fastModMultiplier = source._fastModMultiplier;
 #endif
             if (source._Buckets != EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
-                _Entries = new Pair[source._Entries.Length];
-                _FreeList = new int[source._FreeList.Length];
+                _Entries = new Entry[source._Entries.Length];
                 Array.Copy(source._Buckets, _Buckets, _Buckets.Length);
                 Array.Copy(source._Entries, _Entries, _Count);
-                Array.Copy(source._FreeList, _FreeList, _FreeListCount);
             }
         }
 
@@ -149,10 +147,12 @@ namespace SimdDictionary {
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
-            var newEntries = new Pair[_GrowAtCount];
-            // Initialize the bucket indices to -1
+            var newEntries = new Entry[_GrowAtCount];
+            // Initialize all the bucket indices to -1, we'll populate them during rehash
             Array.Fill(newBuckets, Bucket.Empty);
             Array.Copy(oldEntries, newEntries, oldEntries.Length);
+            // Initialize the new empty entries to not be part of the freelist
+            Array.Fill(newEntries, Entry.Empty, oldEntries.Length, _GrowAtCount - oldEntries.Length);
             // Store the larger entries array first before storing a buckets array that could end up referencing an out-of-range index
             _Entries = newEntries;
             Thread.MemoryBarrier();
@@ -172,7 +172,7 @@ namespace SimdDictionary {
         internal bool TryRehash (Bucket[] _oldBuckets) {
             var oldBuckets = (Span<Bucket>)_oldBuckets;
             var newBuckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Pair>)_Entries;
+            var entries = (Span<Entry>)_Entries;
             var comparer = Comparer;
             var count = _Count;
 
@@ -281,7 +281,7 @@ namespace SimdDictionary {
             // vpbroadcastb is 1op/1c latency on most x86-64 chips, so doing it early isn't very useful either.
             // Unfortunately in some cases Vector128.Create(suffix) gets LICM'd into xmm6 too... https://github.com/dotnet/runtime/issues/108092
             var suffix = GetHashSuffix(hashCode);
-            Span<Pair> pairs = _Entries;
+            Span<Entry> pairs = _Entries;
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = enumerator.bucket.Count, 
@@ -343,7 +343,7 @@ namespace SimdDictionary {
             Debug.Assert((newEntryIndex >= 0) && (newEntryIndex < _Entries.Length));
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
             var suffix = GetHashSuffix(hashCode);
-            Span<Pair> pairs = _Entries;
+            Span<Entry> pairs = _Entries;
             do {
                 int bucketCount = enumerator.bucket.Count;
                 int startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
@@ -363,13 +363,20 @@ namespace SimdDictionary {
                 if (TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, newEntryIndex)) {
                     _Count++;
 
-                    ref var entry = ref pairs[newEntryIndex];
+                    var freeIndex = _FreeListStart;
+                    ref var entry = ref pairs[
+                        freeIndex >= 0 ? freeIndex : newEntryIndex
+                    ];
 #if DEBUG
-                    if (!entry.IsDefault)
+                    if (!entry.IsEmpty)
                         throw new Exception();
 #endif
                     entry.Key = key;
                     entry.Value = value;
+                    if (entry.NextFreeSlot >= 0) {
+                        _FreeListStart = entry.NextFreeSlot;
+                        entry.NextFreeSlot = -1;
+                    }
 
                     // Increase the cascade counters for the buckets we checked before this one.
                     AdjustCascadeCounts(enumerator, true);
@@ -406,14 +413,14 @@ namespace SimdDictionary {
                     // Can we refactor it away? The good news is RyuJIT optimizes it out entirely in find/insert.
                     bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                     bucket.SetSlot((uint)replacementIndexInBucket, 0);
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>()) {
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
                         ref var entry = ref _Entries[toRemove];
                         entry = default;
                     }
                     toRemove = replacement;
                 } else {
                     bucket.SetSlot((uint)indexInBucket, 0);
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>()) {
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
                         ref var entry = ref _Entries[toRemove];
                         entry = default;
                     }
@@ -430,7 +437,7 @@ namespace SimdDictionary {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
             var suffix = GetHashSuffix(hashCode);
-            Span<Pair> entries = _Entries;
+            Span<Entry> entries = _Entries;
             do {
                 int bucketCount = enumerator.bucket.Count,
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
@@ -438,7 +445,12 @@ namespace SimdDictionary {
 
                 if (entryIndex >= 0) {
                     _Count--;
-                    entries[entryIndex] = default;
+                    ref var entry = ref entries[entryIndex];
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
+                        entry = default;
+                    var fls = _FreeListStart;
+                    entry.NextFreeSlot = fls >= 0 ? fls : FreeListIndex_EndOfFreeList;
+                    _FreeListStart = entryIndex;
                     RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
                     AdjustCascadeCounts(enumerator, false);
@@ -542,13 +554,12 @@ namespace SimdDictionary {
             if (_Count == 0)
                 return;
 
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>())
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                 // FIXME: Only clear occupied slots
-                Array.Clear(_Entries);
-            Array.Clear(_FreeList, 0, _FreeListCount);
+                Array.Fill(_Entries, Entry.Empty);
 
             _Count = 0;
-            _FreeListCount = 0;
+            _FreeListStart = -1;
             // We can't clear buckets with Array.Clear, because the indices have to be -1
             Array.Fill(_Buckets, Bucket.Empty);
         }
@@ -572,7 +583,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Pair> entries) {
+            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
                 // We could micro-optimize this, but we don't need to - it's already faster than SCG
                 for (int j = 0; j < bucket.Count; j++) {
                     var index = bucket.Indices[j];
@@ -638,7 +649,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Pair> entries) {
+            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
                 for (int j = 0; j < bucket.Count; j++) {
                     var index = bucket.Indices[j];
                     ref var entry = ref entries[index];
@@ -659,7 +670,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Pair> entries) {
+            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
                 for (int j = 0; j < bucket.Count; j++) {
                     var index = bucket.Indices[j];
                     ref var entry = ref entries[index];
@@ -680,7 +691,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Pair> entries) {
+            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
                 for (int j = 0; j < bucket.Count; j++) {
                     var index = bucket.Indices[j];
                     ref var entry = ref entries[index];

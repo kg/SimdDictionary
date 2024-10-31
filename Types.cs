@@ -21,14 +21,24 @@ namespace SimdDictionary {
             CountSlot = 14,
             CascadeSlot = 15;
 
-        [DebuggerDisplay("{Key}, {Value}")]
-        internal struct Pair {
+        [DebuggerDisplay("{Key}, {Value} NextFree={NextFreeSlot}")]
+        internal struct Entry {
+            public static readonly Entry Empty;
+
             public K Key;
             public V Value;
+            public int NextFreeSlot;
 
-            public bool IsDefault =>
-                EqualityComparer<K>.Default.Equals(Key, default) &&
-                    EqualityComparer<V>.Default.Equals(Value, default);
+            static Entry () {
+                var empty = default(Entry);
+                empty.NextFreeSlot = -1;
+                Empty = empty;
+            }
+
+            public bool IsEmpty =>
+                (NextFreeSlot >= 0) ||
+                (EqualityComparer<K>.Default.Equals(Key, default) &&
+                    EqualityComparer<V>.Default.Equals(Value, default));
         }
         
         // This size must match or exceed BucketSizeI
@@ -124,7 +134,7 @@ namespace SimdDictionary {
             static abstract int FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, 
-                Span<Pair> pairs, 
+                Span<Entry> pairs, 
                 int startIndexInBucket, int bucketCount,
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             );
@@ -135,7 +145,7 @@ namespace SimdDictionary {
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
         internal interface IBucketCallback {
             // Return false to stop iteration
-            abstract bool Bucket (ref Bucket bucket, Span<Pair> entries);
+            abstract bool Bucket (ref Bucket bucket, Span<Entry> entries);
         }
     }
 }

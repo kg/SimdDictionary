@@ -101,7 +101,7 @@ namespace SimdDictionary {
 
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
             var buckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Pair>)_Entries;
+            var entries = (Span<Entry>)_Entries;
             ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
                 lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
 
@@ -188,7 +188,7 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static unsafe int FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, Span<Pair> entries, int indexInBucket, int bucketCount, 
+                [UnscopedRef] ref Bucket bucket, Span<Entry> entries, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
@@ -227,7 +227,7 @@ namespace SimdDictionary {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static unsafe int FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, Span<Pair> entries, int indexInBucket, int bucketCount, 
+                [UnscopedRef] ref Bucket bucket, Span<Entry> entries, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
