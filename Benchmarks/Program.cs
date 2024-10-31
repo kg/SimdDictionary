@@ -42,7 +42,7 @@ namespace Benchmarks {
             int c = 16 * 1024,
                 d = 4096 * (Debugger.IsAttached ? 1 : 5),
                 e = 1024 * (Debugger.IsAttached ? 1 : 5),
-                f = 16;
+                f = 40960;
             List<TKey> keys = new(c),
                 unusedKeys = new(c);
             List<TValue> values = new (c);

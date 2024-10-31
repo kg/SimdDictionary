@@ -333,7 +333,8 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : struct, IKeySearcher 
         {
-            var newEntryIndex = _Count;
+            var freeListStart = _FreeListStart;
+            var newEntryIndex = freeListStart >= 0 ? freeListStart : _Count;
             var needToGrow = (newEntryIndex >= _GrowAtCount);
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             // Pipelining: This is almost never true, so don't branch off it immediately.
@@ -363,18 +364,16 @@ namespace SimdDictionary {
                 if (TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, newEntryIndex)) {
                     _Count++;
 
-                    var freeIndex = _FreeListStart;
-                    ref var entry = ref pairs[
-                        freeIndex >= 0 ? freeIndex : newEntryIndex
-                    ];
+                    ref var entry = ref pairs[newEntryIndex];
 #if DEBUG
                     if (!entry.IsEmpty)
                         throw new Exception();
 #endif
                     entry.Key = key;
                     entry.Value = value;
-                    if (entry.NextFreeSlot >= 0) {
-                        _FreeListStart = entry.NextFreeSlot;
+                    var nextFreeSlot = entry.NextFreeSlot;
+                    if (nextFreeSlot >= 0) {
+                        _FreeListStart = (nextFreeSlot != FreeListIndex_EndOfFreeList) ? nextFreeSlot : -1;
                         entry.NextFreeSlot = -1;
                     }
 
