@@ -115,18 +115,18 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static unsafe int FindSuffixInBucket (ref Bucket bucket, byte suffix, int bucketCount) {
+        internal static unsafe int FindSuffixInBucket (ref Bucket bucket, Vector128<byte> searchVector, int bucketCount) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
                 // FIXME: It would be nice to precompute the search vector outside of the loop, to hide the latency of vpbroadcastb.
                 // Right now if we do that, ryujit places the search vector in xmm6 which forces stack spills, and that's worse.
                 // So we have to compute it on-demand here. On modern x86-64 chips the latency of vpbroadcastb is 1, at least.
                 // FIXME: For some key types RyuJIT hoists the Vector128.Create out of the loop for us and causes a stack spill anyway :(
-                return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(Vector128.Create(suffix), bucket.Suffixes)));
+                return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket.Suffixes)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
                 var laneBits = AdvSimd.And(
-                    AdvSimd.CompareEqual(Vector128.Create(suffix), bucket.Suffixes), 
+                    AdvSimd.CompareEqual(searchVector, bucket.Suffixes), 
                     Vector128.Create(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128)
                 );
                 var moveMask = AdvSimd.Arm64.AddAcross(laneBits.GetLower()).ToScalar() |
@@ -134,11 +134,12 @@ namespace SimdDictionary {
                 return BitOperations.TrailingZeroCount(moveMask);
             } else if (PackedSimd.IsSupported) {
                 // Completely untested
-                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(Vector128.Create(suffix), bucket.Suffixes)));
+                return BitOperations.TrailingZeroCount(PackedSimd.Bitmask(PackedSimd.CompareEqual(searchVector, bucket.Suffixes)));
             } else {
 #else
             {
 #endif
+                var suffix = searchVector[0];
                 var haystack = (byte*)Unsafe.AsPointer(ref bucket);
                 // FIXME: Hand-unrolling into a chain of cmovs like in dn_simdhash doesn't work.
                 for (int i = 0; i < bucketCount; i++) {

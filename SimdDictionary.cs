@@ -15,6 +15,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
 using System.Runtime.Serialization;
 
 namespace SimdDictionary {
@@ -274,18 +275,18 @@ namespace SimdDictionary {
             where TKeySearcher : struct, IKeySearcher 
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
+            // Vector128.Create(suffix) will get LICM'd in many cases even if it's unhelpful, so just
+            //  consistently pre-create the search vector manually. On some arches this is probably good.
+            // See also https://github.com/dotnet/runtime/issues/108092
+            var suffix = GetHashSuffix(hashCode);
+            var searchVector = Vector128.Create(suffix);
             // It's important to construct the enumerator before computing the suffix, to avoid stalls
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
-            // Pre-creating the search vector here using Vector128.Create is possible, but it gets stored into xmm6 and causes
-            //  an unconditional stack spill at entry, which outweighs any performance benefit from creating it early.
-            // vpbroadcastb is 1op/1c latency on most x86-64 chips, so doing it early isn't very useful either.
-            // Unfortunately in some cases Vector128.Create(suffix) gets LICM'd into xmm6 too... https://github.com/dotnet/runtime/issues/108092
-            var suffix = GetHashSuffix(hashCode);
             Span<Entry> pairs = _Entries;
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = enumerator.bucket.Count, 
-                    startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
+                    startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
                 var result = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, pairs, startIndex, bucketCount, comparer, key, out _);
                 if (result < 0) {
                     if (enumerator.bucket.CascadeCount == 0)
@@ -340,14 +341,15 @@ namespace SimdDictionary {
             // Pipelining: This is almost never true, so don't branch off it immediately.
             if (needToGrow)
                 return InsertResult.NeedToGrow;
+            var suffix = GetHashSuffix(hashCode);
+            var searchVector = Vector128.Create(suffix);
             // You should have already made sure there was enough space for your value - entryIndex must be valid
             Debug.Assert((newEntryIndex >= 0) && (newEntryIndex < _Entries.Length));
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
-            var suffix = GetHashSuffix(hashCode);
             Span<Entry> pairs = _Entries;
             do {
                 int bucketCount = enumerator.bucket.Count;
-                int startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
+                int startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
                 int entryIndex = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, pairs, startIndex, bucketCount, comparer, key, out _);
 
                 if (entryIndex >= 0) {
@@ -434,12 +436,13 @@ namespace SimdDictionary {
             where TKeySearcher : struct, IKeySearcher
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            var enumerator = new LoopingBucketEnumerator(this, hashCode);
             var suffix = GetHashSuffix(hashCode);
+            var searchVector = Vector128.Create(suffix);
+            var enumerator = new LoopingBucketEnumerator(this, hashCode);
             Span<Entry> entries = _Entries;
             do {
                 int bucketCount = enumerator.bucket.Count,
-                    startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
+                    startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
                 int entryIndex = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, entries, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (entryIndex >= 0) {
