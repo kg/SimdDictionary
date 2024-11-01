@@ -1,13 +1,5 @@
-﻿// This is considerably slower than power-of-two bucket counts, but it provides
-//  much better collision resistance than power-of-two bucket counts do. However,
-// Murmur3 finalization + Power-of-two bucket counts (see below) performs much better and has
-//  higher collision resistance due to improving the quality of suffixes
-#define PRIME_BUCKET_COUNTS
-// Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
+﻿// Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
 // #define PERMUTE_HASH_CODES
-// Use an unrolled slot-clearing routine instead of just doing Pairs = default. Unclear whether this is better.
-// Probably *is* better for keys or values that are very big and contain references.
-#define UNROLLED_CLEAR_WITH_REFS
 
 using System;
 using System.Collections;
@@ -24,10 +16,6 @@ namespace SimdDictionary {
         ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
         where K : notnull
     {
-#if PRIME_BUCKET_COUNTS
-        private ulong _fastModMultiplier;
-#endif
-
         private const int MinimumEntryCapacity = 1,
             FreeListIndexPlusOne_Occupied = 0,
             FreeListIndexPlusOne_EndOfFreeList = int.MaxValue;
@@ -36,6 +24,7 @@ namespace SimdDictionary {
         public KeyCollection Keys => new KeyCollection(this);
         public ValueCollection Values => new ValueCollection(this);
         public readonly IEqualityComparer<K>? Comparer;
+        private ulong _fastModMultiplier;
         // It's important for an empty dictionary to have both count and growatcount be 0
         private int _Count = 0, 
             _GrowAtCount = 0,
@@ -81,9 +70,7 @@ namespace SimdDictionary {
             _Count = source._Count;
             _GrowAtCount = source._GrowAtCount;
             _FreeListStart = source._FreeListStart;
-#if PRIME_BUCKET_COUNTS
             _fastModMultiplier = source._fastModMultiplier;
-#endif
             if (source._Buckets != EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
                 _Entries = new Entry[source._Entries.Length];
@@ -111,9 +98,7 @@ namespace SimdDictionary {
 
         internal void Resize (int capacity) {
             int bucketCount;
-#if PRIME_BUCKET_COUNTS
             ulong fastModMultiplier;
-#endif
 
             checked {
                 capacity = (int)((long)capacity * OversizePercentage / 100);
@@ -122,13 +107,8 @@ namespace SimdDictionary {
 
                 bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
 
-#if PRIME_BUCKET_COUNTS
                 bucketCount = bucketCount > 1 ? HashHelpers.GetPrime(bucketCount) : 1;
                 fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
-#else
-                // Power-of-two bucket counts enable using & (count - 1) instead of mod count
-                bucketCount = (int)BitOperations.RoundUpToPowerOf2((uint)bucketCount);
-#endif
             }
 
             var actualCapacity = bucketCount * BucketSizeI;
@@ -153,10 +133,8 @@ namespace SimdDictionary {
             // This ensures that concurrent modification will not produce a bucket index that is too big.
             _Buckets = newBuckets;
             Thread.MemoryBarrier();
-#if PRIME_BUCKET_COUNTS
             // FIXME: How do we guard this against concurrent modification?
             _fastModMultiplier = fastModMultiplier;
-#endif
             if ((oldBuckets != EmptyBuckets) && (_Count > 0))
                 if (!TryRehash(oldBuckets))
                     Environment.FailFast("Failed to rehash dictionary for resize operation");
@@ -238,7 +216,6 @@ namespace SimdDictionary {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
-#if PRIME_BUCKET_COUNTS
             // NOTE: If the caller observes a new _fastModMultiplier before seeing a larger buckets array,
             //  this can overrun the end of the array.
             unchecked((int)HashHelpers.FastMod(
@@ -247,9 +224,6 @@ namespace SimdDictionary {
                 // This doesn't appear to generate a memory barrier or anything.
                 Volatile.Read(ref _fastModMultiplier)
             ));
-#else
-            unchecked((int)(hashCode & (uint)(buckets.Length - 1)));
-#endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal int FindKey (K key, Span<Entry> entries) {
@@ -272,7 +246,6 @@ namespace SimdDictionary {
             // See also https://github.com/dotnet/runtime/issues/108092
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
-            // It's important to construct the enumerator before computing the suffix, to avoid stalls
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
