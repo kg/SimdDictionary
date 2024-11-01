@@ -30,18 +30,4 @@ public static class DisasmHarness
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void Clear () => 
         Dict.Clear();
-
-    public static IEqualityComparer<byte> Comparer = EqualityComparer<byte>.Default;
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public static byte VectorLicm (byte scalar) {
-        int result = 0;
-        for (int i = 0; i < 256; i++) {
-            var mask = Vector128.Equals(Vector128.Create(scalar), Vector128.Create(unchecked((byte)i)));
-            if (!Comparer.Equals(mask.ToScalar(), 0))
-                result++;
-        }
-
-        return scalar;
-    }
 }

@@ -21,8 +21,7 @@ namespace SimdDictionary {
         internal ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
             // The current size is BARELY small enough for TryGetValue to run without touching stack. TryInsert for reftypes still touches stack.
-            public int remainingUntilWrap;
-            public ref Bucket firstBucket, bucket;
+            public ref Bucket firstBucket, bucket, lastBucket;
             public ref Bucket initialBucket;
 
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
@@ -34,8 +33,7 @@ namespace SimdDictionary {
 
                 // The start of the array. We need to stash this so we can loop later, and we're using it below too.
                 firstBucket = ref MemoryMarshal.GetReference(buckets);
-                // The number of buckets we can check before hitting the end, at which point we need to loop back to firstBucket.
-                remainingUntilWrap = buckets.Length - initialBucketIndex - 1;
+                lastBucket = ref Unsafe.Add(ref firstBucket, buckets.Length - 1);
 
                 // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
                 // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
@@ -53,15 +51,10 @@ namespace SimdDictionary {
 
                 // Technically it should never be possible for this to become negative, but if we were initialized with a bad
                 //  bucket index, it could be. In this case <= and == produce equivalently fast code anyway.
-                if (remainingUntilWrap <= 0) {
+                if (Unsafe.AreSame(ref bucket, ref lastBucket))
                     bucket = ref firstBucket;
-                    // Now that we've wrapped around, we will encounter initialBucket before we ever overrun the end of the 
-                    //  array, so it's safe for remainingUntilWrap to be int.MaxValue.
-                    remainingUntilWrap = int.MaxValue;
-                } else {
+                else
                     bucket = ref Unsafe.Add(ref bucket, 1);
-                    --remainingUntilWrap;
-                }
 
                 if (Unsafe.AreSame(ref bucket, ref initialBucket))
                     return false;
@@ -76,16 +69,9 @@ namespace SimdDictionary {
                 if (Unsafe.AreSame(ref bucket, ref initialBucket))
                     return false;
 
-                if (Unsafe.AreSame(ref bucket, ref firstBucket)) {
-                    // Wrapping around backwards during a retreat is uncommon, so the field load is okay.
-                    var buckets = self._Buckets;
-                    ref var newFirstBucket = ref MemoryMarshal.GetArrayDataReference(buckets);
-                    // We had to re-load our array from a field, so the array could have been replaced since we first
-                    //  loaded it and calculated firstBucket. Make sure it hasn't changed.
-                    if (!Unsafe.AreSame(ref firstBucket, ref newFirstBucket))
-                        Environment.FailFast("SimdDictionary was resized during cascade count update");
-                    bucket = ref Unsafe.Add(ref newFirstBucket, buckets.Length - 1);
-                } else
+                if (Unsafe.AreSame(ref bucket, ref firstBucket))
+                    bucket = ref lastBucket;
+                else
                     bucket = ref Unsafe.Subtract(ref bucket, 1);
 
                 // It's okay if we're standing on our initial bucket right now.
@@ -179,6 +165,9 @@ namespace SimdDictionary {
             }
         }
 
+        internal static ref Entry EntryFromIndexPlusOneUnchecked (Span<Entry> entries, int indexPlusOne) =>
+            ref Unsafe.Add(ref MemoryMarshal.GetReference(entries), unchecked(indexPlusOne - 1));
+
 #pragma warning disable CS8619
         // These have to be structs so that the JIT will specialize callers instead of Canonizing them
         internal struct DefaultComparerKeySearcher : IKeySearcher {
@@ -204,7 +193,7 @@ namespace SimdDictionary {
 
                 ref int indexPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
                 while (true) {
-                    if (EqualityComparer<K>.Default.Equals(needle, entries[unchecked(indexPlusOne - 1)].Key)) {
+                    if (EqualityComparer<K>.Default.Equals(needle, EntryFromIndexPlusOneUnchecked(entries, indexPlusOne).Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
@@ -242,7 +231,7 @@ namespace SimdDictionary {
 
                 ref int indexPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
                 while (true) {
-                    if (comparer.Equals(needle, entries[indexPlusOne - 1].Key)) {
+                    if (comparer.Equals(needle, EntryFromIndexPlusOneUnchecked(entries, indexPlusOne).Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;

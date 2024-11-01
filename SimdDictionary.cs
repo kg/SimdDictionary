@@ -28,7 +28,7 @@ namespace SimdDictionary {
         private ulong _fastModMultiplier;
 #endif
 
-        private const int MinimumEntryCapacity = 6,
+        private const int MinimumEntryCapacity = 1,
             FreeListIndexPlusOne_Occupied = 0,
             FreeListIndexPlusOne_EndOfFreeList = int.MaxValue;
 
@@ -361,7 +361,7 @@ namespace SimdDictionary {
                     entry.Value = value;
                     var nextFreeSlot = entry.NextFreeSlot;
                     if (nextFreeSlot >= 0) {
-                        _FreeListStart = (nextFreeSlot != FreeListIndexPlusOne_EndOfFreeList) ? nextFreeSlot : -1;
+                        _FreeListStart = (nextFreeSlot != FreeListIndexPlusOne_EndOfFreeList) ? nextFreeSlot : -2;
                         entry.NextFreeSlotPlusOne = FreeListIndexPlusOne_Occupied;
                     }
 
@@ -544,7 +544,7 @@ namespace SimdDictionary {
                 return;
 
             _Count = 0;
-            _FreeListStart = -1;
+            _FreeListStart = -2;
             // FIXME: Only clear occupied slots or slots on the freelist
             Array.Clear(_Entries);
             Array.Clear(_Buckets);
