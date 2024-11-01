@@ -252,18 +252,18 @@ namespace SimdDictionary {
 #endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int FindKey (K key) {
+        internal int FindKey (K key, Span<Entry> entries) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
-                return FindKey<DefaultComparerKeySearcher>(key, null);
+                return FindKey<DefaultComparerKeySearcher>(key, null, entries);
             else
-                return FindKey<ComparerKeySearcher>(key, comparer);
+                return FindKey<ComparerKeySearcher>(key, comparer, entries);
         }
 
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is roughly halved.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        internal int FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer, Span<Entry> entries)
             where TKeySearcher : struct, IKeySearcher 
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
@@ -274,12 +274,11 @@ namespace SimdDictionary {
             var searchVector = Vector128.Create(suffix);
             // It's important to construct the enumerator before computing the suffix, to avoid stalls
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
-            Span<Entry> pairs = _Entries;
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = enumerator.bucket.Count, 
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                var result = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, pairs, startIndex, bucketCount, comparer, key, out _);
+                var result = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, entries, startIndex, bucketCount, comparer, key, out _);
                 if (result < 0) {
                     if (enumerator.bucket.CascadeCount == 0)
                         return result;
@@ -458,10 +457,11 @@ namespace SimdDictionary {
         public V this[K key] { 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
-                int index = FindKey(key);
+                var entries = (Span<Entry>)_Entries;
+                int index = FindKey(key, entries);
                 if (index < 0)
                     throw new KeyNotFoundException($"Key not found: {key}");
-                return _Entries[index].Value;
+                return entries[index].Value;
             }
             set {
             retry:
@@ -551,13 +551,14 @@ namespace SimdDictionary {
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
-            var index = FindKey(item.Key);
+            var entries = (Span<Entry>)_Entries;
+            var index = FindKey(item.Key, entries);
             return (index >= 0) && 
-                EqualityComparer<V>.Default.Equals(_Entries[index].Value, item.Value);
+                EqualityComparer<V>.Default.Equals(entries[index].Value, item.Value);
         }
 
         public bool ContainsKey (K key) =>
-            FindKey(key) >= 0;
+            FindKey(key, _Entries) >= 0;
 
         internal struct ContainsValueCallback : IEntryCallback {
             public readonly V Value;
@@ -607,12 +608,13 @@ namespace SimdDictionary {
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
-            var index = FindKey(key);
+            var entries = (Span<Entry>)_Entries;
+            var index = FindKey(key, entries);
             if (index < 0) {
                 value = default!;
                 return false;
             } else {
-                value = _Entries[index].Value;
+                value = entries[index].Value;
                 return true;
             }
         }
