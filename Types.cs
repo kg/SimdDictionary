@@ -17,32 +17,27 @@ namespace SimdDictionary {
             // User-specified capacity values will be increased by this percentage in order
             //  to maintain an ideal load factor. FIXME: 120 isn't right
             OversizePercentage = 120,
-            BucketSizeI = 14,
+            // Make buckets 64 bytes (12 4-byte entry indices + 16-byte suffix vector) to turn imuls/idivs into shifts
+            BucketSizeI = 12,
             CountSlot = 14,
             CascadeSlot = 15;
 
         [DebuggerDisplay("{Key}, {Value} NextFree={NextFreeSlot}")]
         internal struct Entry {
-            public static readonly Entry Empty;
-
             public K Key;
             public V Value;
-            public int NextFreeSlot;
-
-            static Entry () {
-                var empty = default(Entry);
-                empty.NextFreeSlot = -1;
-                Empty = empty;
-            }
+            public int NextFreeSlotPlusOne;
 
             public bool IsEmpty =>
-                (NextFreeSlot >= 0) ||
+                (NextFreeSlotPlusOne > 0) ||
                 (EqualityComparer<K>.Default.Equals(Key, default) &&
                     EqualityComparer<V>.Default.Equals(Value, default));
+
+            public int NextFreeSlot => unchecked(NextFreeSlotPlusOne - 1);
         }
         
         // This size must match or exceed BucketSizeI
-        [InlineArray(14)]
+        [InlineArray(12)]
         internal struct InlineIndexArray {
             public int Index0;
         }
@@ -50,16 +45,7 @@ namespace SimdDictionary {
         [StructLayout(LayoutKind.Sequential, Pack = 16)]
         internal struct Bucket {
             public Vector128<byte> Suffixes;
-            public InlineIndexArray Indices;
-
-            public static readonly Bucket Empty;
-
-            static Bucket () {
-                var empty = default(Bucket);
-                for (int i = 0; i < BucketSizeI; i++)
-                    empty.Indices[i] = -1;
-                Empty = empty;
-            }
+            public InlineIndexArray IndicesPlusOne;
 
             internal byte _Count => Count;
 
@@ -98,7 +84,7 @@ namespace SimdDictionary {
                 for (int i = 0; i < Count; i++) {
                     if (i > 0)
                         sb.Append(',');
-                    var idx = Indices[i];
+                    var idx = IndicesPlusOne[i] - 1;
                     if (idx == -1)
                         sb.Append("empty");
                     else
@@ -142,10 +128,10 @@ namespace SimdDictionary {
             static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
         }
 
-        // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
-        internal interface IBucketCallback {
+        // Used to encapsulate operations that enumerate all the entries synchronously (i.e. CopyTo)
+        internal interface IEntryCallback {
             // Return false to stop iteration
-            abstract bool Bucket (ref Bucket bucket, Span<Entry> entries);
+            abstract bool Entry (ref Entry entry);
         }
     }
 }

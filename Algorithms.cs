@@ -95,20 +95,22 @@ namespace SimdDictionary {
 
         // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnumerateBuckets<TCallback> (ref TCallback callback)
-            where TCallback : struct, IBucketCallback {
-            // We can't early-out if Count is 0 here since this could be invoked by Clear
-
+        private void EnumerateOccupiedEntries<TCallback> (ref TCallback callback)
+            where TCallback : struct, IEntryCallback {
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
-            var buckets = (Span<Bucket>)_Buckets;
             var entries = (Span<Entry>)_Entries;
-            ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
-                lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
+            ref Entry entry = ref MemoryMarshal.GetReference(entries),
+                lastEntry = ref Unsafe.Add(ref entry, entries.Length - 1);
 
             while (true) {
-                var ok = callback.Bucket(ref bucket, entries);
-                if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket))
-                    bucket = ref Unsafe.Add(ref bucket, 1);
+                bool ok;
+                if (entry.NextFreeSlotPlusOne <= 0)
+                    ok = callback.Entry(ref entry);
+                else
+                    ok = true;
+
+                if (ok && !Unsafe.AreSame(ref entry, ref lastEntry))
+                    entry = ref Unsafe.Add(ref entry, 1);
                 else
                     break;
             }
@@ -200,21 +202,20 @@ namespace SimdDictionary {
                 if (count <= 0)
                     return -1;
 
-                ref int index = ref Unsafe.Add(ref bucket.Indices.Index0, indexInBucket);
+                ref int indexPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
                 while (true) {
-                    ref var pair = ref entries[index];
-                    if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
+                    if (EqualityComparer<K>.Default.Equals(needle, entries[unchecked(indexPlusOne - 1)].Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
-                        return index;
+                        return unchecked(indexPlusOne - 1);
                     }
 
                     // NOTE: --count <= 0 produces an extra 'test' opcode
                     if (--count == 0)
                         return -1;
                     else
-                        index = ref Unsafe.Add(ref index, 1);
+                        indexPlusOne = ref Unsafe.Add(ref indexPlusOne, 1);
                 }
             }
         }
@@ -239,21 +240,20 @@ namespace SimdDictionary {
                 if (count <= 0)
                     return -1;
 
-                ref int index = ref Unsafe.Add(ref bucket.Indices.Index0, indexInBucket);
+                ref int indexPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
                 while (true) {
-                    ref var pair = ref entries[index];
-                    if (comparer.Equals(needle, pair.Key)) {
+                    if (comparer.Equals(needle, entries[indexPlusOne - 1].Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
-                        return index;
+                        return unchecked(indexPlusOne - 1);
                     }
 
                     // NOTE: --count <= 0 produces an extra 'test' opcode
                     if (--count == 0)
                         return -1;
                     else
-                        index = ref Unsafe.Add(ref index, 1);
+                        indexPlusOne = ref Unsafe.Add(ref indexPlusOne, 1);
                 }
             }
         }

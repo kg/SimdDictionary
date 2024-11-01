@@ -29,12 +29,12 @@ namespace SimdDictionary {
 #endif
 
         private const int MinimumEntryCapacity = 6,
-            FreeListIndex_Occupied = -1,
-            FreeListIndex_EndOfFreeList = int.MaxValue;
+            FreeListIndexPlusOne_Occupied = 0,
+            FreeListIndexPlusOne_EndOfFreeList = int.MaxValue;
 
         // TODO: Make these reference types initialized on demand / add cache fields for the accessors that box them.
-        public readonly KeyCollection Keys;
-        public readonly ValueCollection Values;
+        public KeyCollection Keys => new KeyCollection(this);
+        public ValueCollection Values => new ValueCollection(this);
         public readonly IEqualityComparer<K>? Comparer;
         // It's important for an empty dictionary to have both count and growatcount be 0
         private int _Count = 0, 
@@ -46,8 +46,8 @@ namespace SimdDictionary {
         //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
         //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
         //  we're empty.
-        private static readonly Bucket[] EmptyBuckets = [ Bucket.Empty ];
-        private static readonly Entry[] EmptyEntries = [ Entry.Empty ];
+        private static readonly Bucket[] EmptyBuckets = [ default ];
+        private static readonly Entry[] EmptyEntries = [ default ];
 #pragma warning restore CA1825
 
         private Bucket[] _Buckets = EmptyBuckets;
@@ -74,13 +74,9 @@ namespace SimdDictionary {
             else
                 Comparer = comparer ?? EqualityComparer<K>.Default;            
             EnsureCapacity(capacity);
-            Keys = new KeyCollection(this);
-            Values = new ValueCollection(this);
         }
 
         public SimdDictionary (SimdDictionary<K, V> source) {
-            Keys = new KeyCollection(this);
-            Values = new ValueCollection(this);
             Comparer = source.Comparer;
             _Count = source._Count;
             _GrowAtCount = source._GrowAtCount;
@@ -149,11 +145,7 @@ namespace SimdDictionary {
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
             var newEntries = new Entry[_GrowAtCount];
-            // Initialize all the bucket indices to -1, we'll populate them during rehash
-            Array.Fill(newBuckets, Bucket.Empty);
             Array.Copy(oldEntries, newEntries, oldEntries.Length);
-            // Initialize the new empty entries to not be part of the freelist
-            Array.Fill(newEntries, Entry.Empty, oldEntries.Length, _GrowAtCount - oldEntries.Length);
             // Store the larger entries array first before storing a buckets array that could end up referencing an out-of-range index
             _Entries = newEntries;
             Thread.MemoryBarrier();
@@ -314,16 +306,10 @@ namespace SimdDictionary {
                 return false;
 
             unchecked {
-                ref var destination = ref Unsafe.Add(ref bucket.Indices.Index0, bucketCount);
+                ref var destinationPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, bucketCount);
                 bucket.Count = (byte)(bucketCount + 1);
                 bucket.SetSlot((nuint)bucketCount, suffix);
-                destination = entryIndex;
-#if DEBUG
-                if (destination != entryIndex)
-                    throw new Exception();
-                if (bucket.Indices[bucketCount] != entryIndex)
-                    throw new Exception();
-#endif
+                destinationPlusOne = entryIndex + 1;
             }
 
             return true;
@@ -375,8 +361,8 @@ namespace SimdDictionary {
                     entry.Value = value;
                     var nextFreeSlot = entry.NextFreeSlot;
                     if (nextFreeSlot >= 0) {
-                        _FreeListStart = (nextFreeSlot != FreeListIndex_EndOfFreeList) ? nextFreeSlot : -1;
-                        entry.NextFreeSlot = -1;
+                        _FreeListStart = (nextFreeSlot != FreeListIndexPlusOne_EndOfFreeList) ? nextFreeSlot : -1;
+                        entry.NextFreeSlotPlusOne = FreeListIndexPlusOne_Occupied;
                     }
 
                     // Increase the cascade counters for the buckets we checked before this one.
@@ -405,27 +391,28 @@ namespace SimdDictionary {
             unchecked {
                 int replacementIndexInBucket = bucketCount - 1;
                 bucket.Count = (byte)replacementIndexInBucket;
-                ref var toRemove = ref Unsafe.Add(ref bucket.Indices.Index0, indexInBucket);
-                ref var replacement = ref Unsafe.Add(ref bucket.Indices.Index0, replacementIndexInBucket);
+                ref var toRemovePlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
+                ref var replacementPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, replacementIndexInBucket);
                 // This rotate-back algorithm makes removes more expensive than if we were to just always zero the slot.
                 // But then other algorithms like insertion get more expensive, since we have to search for a zero to replace...
-                if (!Unsafe.AreSame(ref toRemove, ref replacement)) {
+                if (!Unsafe.AreSame(ref toRemovePlusOne, ref replacementPlusOne)) {
                     // TODO: This is the only place in the find/insert/remove algorithms that actually needs indexInBucket.
                     // Can we refactor it away? The good news is RyuJIT optimizes it out entirely in find/insert.
                     bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                     bucket.SetSlot((uint)replacementIndexInBucket, 0);
                     if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
-                        ref var entry = ref _Entries[toRemove];
+                        ref var entry = ref _Entries[unchecked(toRemovePlusOne - 1)];
                         entry = default;
                     }
-                    toRemove = replacement;
+                    toRemovePlusOne = replacementPlusOne;
+                    replacementPlusOne = 0;
                 } else {
                     bucket.SetSlot((uint)indexInBucket, 0);
                     if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
-                        ref var entry = ref _Entries[toRemove];
+                        ref var entry = ref _Entries[unchecked(toRemovePlusOne - 1)];
                         entry = default;
                     }
-                    toRemove = -1;
+                    toRemovePlusOne = 0;
                 }
             }
         }
@@ -451,7 +438,7 @@ namespace SimdDictionary {
                     if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
                         entry = default;
                     var fls = _FreeListStart;
-                    entry.NextFreeSlot = fls >= 0 ? fls : FreeListIndex_EndOfFreeList;
+                    entry.NextFreeSlotPlusOne = fls >= 0 ? fls + 1 : FreeListIndexPlusOne_EndOfFreeList;
                     _FreeListStart = entryIndex;
                     RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
@@ -556,14 +543,11 @@ namespace SimdDictionary {
             if (_Count == 0)
                 return;
 
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                // FIXME: Only clear occupied slots
-                Array.Fill(_Entries, Entry.Empty);
-
             _Count = 0;
             _FreeListStart = -1;
-            // We can't clear buckets with Array.Clear, because the indices have to be -1
-            Array.Fill(_Buckets, Bucket.Empty);
+            // FIXME: Only clear occupied slots or slots on the freelist
+            Array.Clear(_Entries);
+            Array.Clear(_Buckets);
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
@@ -575,7 +559,7 @@ namespace SimdDictionary {
         public bool ContainsKey (K key) =>
             FindKey(key) >= 0;
 
-        internal struct ContainsValueCallback : IBucketCallback {
+        internal struct ContainsValueCallback : IEntryCallback {
             public readonly V Value;
             public bool Result;
 
@@ -585,15 +569,10 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
-                // We could micro-optimize this, but we don't need to - it's already faster than SCG
-                for (int j = 0; j < bucket.Count; j++) {
-                    var index = bucket.Indices[j];
-                    ref var entry = ref entries[index];
-                    if (EqualityComparer<V>.Default.Equals(entry.Value, Value)) {
-                        Result = true;
-                        return false;
-                    }
+            public bool Entry (ref Entry entry) {
+                if (EqualityComparer<V>.Default.Equals(entry.Value, Value)) {
+                    Result = true;
+                    return false;
                 }
                 return true;
             }
@@ -604,7 +583,7 @@ namespace SimdDictionary {
                 return false;
 
             var callback = new ContainsValueCallback(value);
-            EnumerateBuckets(ref callback);
+            EnumerateOccupiedEntries(ref callback);
             return callback.Result;
         }
 
@@ -641,7 +620,7 @@ namespace SimdDictionary {
         public object Clone () =>
             new SimdDictionary<K, V>(this);
 
-        private struct CopyToKvp : IBucketCallback {
+        private struct CopyToKvp : IEntryCallback {
             public readonly KeyValuePair<K, V>[] Array;
             public int Index;
 
@@ -651,18 +630,13 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
-                for (int j = 0; j < bucket.Count; j++) {
-                    var index = bucket.Indices[j];
-                    ref var entry = ref entries[index];
-                    Array[Index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
-                }
-
+            public bool Entry (ref Entry entry) {
+                Array[Index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
                 return true;
             }
         }
 
-        private struct CopyToDictionaryEntry : IBucketCallback {
+        private struct CopyToDictionaryEntry : IEntryCallback {
             public readonly DictionaryEntry[] Array;
             public int Index;
 
@@ -672,18 +646,13 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
-                for (int j = 0; j < bucket.Count; j++) {
-                    var index = bucket.Indices[j];
-                    ref var entry = ref entries[index];
-                    Array[Index++] = new DictionaryEntry(entry.Key, entry.Value);
-                }
-
+            public bool Entry (ref Entry entry) {
+                Array[Index++] = new DictionaryEntry(entry.Key, entry.Value);
                 return true;
             }
         }
 
-        private struct CopyToObject : IBucketCallback {
+        private struct CopyToObject : IEntryCallback {
             public readonly object[] Array;
             public int Index;
 
@@ -693,13 +662,8 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket, Span<Entry> entries) {
-                for (int j = 0; j < bucket.Count; j++) {
-                    var index = bucket.Indices[j];
-                    ref var entry = ref entries[index];
-                    Array[Index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
-                }
-
+            public bool Entry (ref Entry entry) {
+                Array[Index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
                 return true;
             }
         }
@@ -714,13 +678,13 @@ namespace SimdDictionary {
 
             if (array is KeyValuePair<K, V>[] kvp) {
                 var c = new CopyToKvp(kvp, index);
-                EnumerateBuckets(ref c);
+                EnumerateOccupiedEntries(ref c);
             } else if (array is DictionaryEntry[] de) {
                 var c = new CopyToDictionaryEntry(de, index);
-                EnumerateBuckets(ref c);
+                EnumerateOccupiedEntries(ref c);
             } else if (array is object[] o) {
                 var c = new CopyToObject(o, index);
-                EnumerateBuckets(ref c);
+                EnumerateOccupiedEntries(ref c);
             } else
                 throw new ArgumentException("Unsupported destination array type");
         }

@@ -377,6 +377,15 @@ namespace Benchmarks {
         }
 
         [Benchmark]
+        public void AllocateSmallSizes () {
+            object[] sizeArray = new object[1];
+            for (int i = 0; i <= 16; i += 1) {
+                sizeArray[0] = i;
+                var instance = (T)Ctor.Invoke(sizeArray);
+            }
+        }
+
+        [Benchmark]
         public void AllocateEverySize () {
             object[] sizeArray = new object[1];
             for (int i = MinCapacity; i <= MaxCapacity; i += CapacityStep) {

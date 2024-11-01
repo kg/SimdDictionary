@@ -190,8 +190,8 @@ namespace SimdDictionary {
 
                 while (_entryIndex < _entryCount) {
                     ref var entry = ref _entries[_entryIndex];
-                    var nextFreeSlot = entry.NextFreeSlot;
-                    if ((nextFreeSlot >= 0) || (nextFreeSlot == FreeListIndex_EndOfFreeList))
+                    var nextFreeSlot = entry.NextFreeSlotPlusOne;
+                    if ((nextFreeSlot > 0) || (nextFreeSlot == FreeListIndexPlusOne_EndOfFreeList))
                         _entryIndex++;
                     else
                         return true;
