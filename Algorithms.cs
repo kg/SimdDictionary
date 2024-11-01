@@ -42,23 +42,27 @@ namespace SimdDictionary {
                 initialBucket = ref bucket;
             }
 
+            // HACK: Outlining this method doesn't reduce code size, so just inline it.
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public ref Bucket GetFirstBucket (SimdDictionary<K, V> self) {
+                // In the common case (given an optimal hash) we won't actually need the address of the first bucket,
+                //  so we no longer store it in the enumerator. Instead, we compute it on-demand by re-loading the field.
+                // This is fairly cheap in practice since our this-reference has to stay around anyway.
+                var buckets = self._Buckets;
+                ref var bucket = ref MemoryMarshal.GetArrayDataReference(buckets);
+                // We re-loaded Buckets, so it may be a different array than it was when we started.
+                // If this is the case, it's impossible to continue since we will never reach initialBucket.
+                if (!Unsafe.AreSame(ref Unsafe.Add(ref bucket, buckets.Length - 1), ref lastBucket))
+                    ThrowConcurrentModification();
+                return ref bucket;
+            }
+
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Advance (SimdDictionary<K, V> self) {
-                // For a single-bucket array, we will always start with bucket == initialBucket == firstBucket, and remainingUntilWrap == 0.
-                // This method will then set bucket = firstBucket and remainingUntilWrap = int.MaxValue.
-                // bucket will then == initialBucket, so we return false.
-                // For larger arrays, we will loop around when we hit the end, and continue until we reach the bucket we started at.
-
-                // Technically it should never be possible for this to become negative, but if we were initialized with a bad
-                //  bucket index, it could be. In this case <= and == produce equivalently fast code anyway.
-                if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
-                    var buckets = self._Buckets;
-                    bucket = ref MemoryMarshal.GetArrayDataReference(buckets);
-                    // We re-loaded Buckets, so it may be a different array than it was when we started.
-                    // If this is the case, it's impossible to continue since we will never reach initialBucket.
-                    if (!Unsafe.AreSame(ref Unsafe.Add(ref bucket, buckets.Length - 1), ref lastBucket))
-                        ThrowConcurrentModification();
-                } else
+                if (Unsafe.AreSame(ref bucket, ref lastBucket))
+                    // Rare case: Wrap around from last bucket to first bucket.
+                    bucket = ref GetFirstBucket(self);
+                else
                     bucket = ref Unsafe.Add(ref bucket, 1);
 
                 if (Unsafe.AreSame(ref bucket, ref initialBucket))
@@ -149,16 +153,12 @@ namespace SimdDictionary {
         internal void AdjustCascadeCounts (
             LoopingBucketEnumerator enumerator, bool increase
         ) {
-            // Early-out before doing setup work
+            // Early-out before doing setup work since in the common case we won't have cascaded out of a bucket at all
             if (Unsafe.AreSame(ref enumerator.bucket, ref enumerator.initialBucket))
                 return;
 
-            var buckets = _Buckets;
-            ref var firstBucket = ref MemoryMarshal.GetArrayDataReference(buckets);
-            ref var lastBucket = ref Unsafe.Add(ref firstBucket, buckets.Length - 1);
-            // The array may have changed since we initially loaded it.
-            if (!Unsafe.AreSame(ref lastBucket, ref enumerator.lastBucket))
-                ThrowConcurrentModification();
+            // We need the first bucket since it's the wrap point for a retreat, instead of lastBucket (which we have already)
+            ref var firstBucket = ref enumerator.GetFirstBucket(this);
 
             // We may have cascaded out of a previous bucket; if so, scan backwards and update
             //  the cascade count for every bucket we previously scanned.
