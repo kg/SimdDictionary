@@ -21,7 +21,7 @@ namespace SimdDictionary {
         internal ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
             // The current size is BARELY small enough for TryGetValue to run without touching stack. TryInsert for reftypes still touches stack.
-            public ref Bucket firstBucket, bucket, lastBucket;
+            public ref Bucket bucket, lastBucket;
             public ref Bucket initialBucket;
 
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
@@ -32,7 +32,7 @@ namespace SimdDictionary {
                 Debug.Assert(buckets.Length > 0);
 
                 // The start of the array. We need to stash this so we can loop later, and we're using it below too.
-                firstBucket = ref MemoryMarshal.GetReference(buckets);
+                ref var firstBucket = ref MemoryMarshal.GetReference(buckets);
                 lastBucket = ref Unsafe.Add(ref firstBucket, buckets.Length - 1);
 
                 // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
@@ -43,7 +43,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Advance () {
+            public bool Advance (SimdDictionary<K, V> self) {
                 // For a single-bucket array, we will always start with bucket == initialBucket == firstBucket, and remainingUntilWrap == 0.
                 // This method will then set bucket = firstBucket and remainingUntilWrap = int.MaxValue.
                 // bucket will then == initialBucket, so we return false.
@@ -51,9 +51,14 @@ namespace SimdDictionary {
 
                 // Technically it should never be possible for this to become negative, but if we were initialized with a bad
                 //  bucket index, it could be. In this case <= and == produce equivalently fast code anyway.
-                if (Unsafe.AreSame(ref bucket, ref lastBucket))
-                    bucket = ref firstBucket;
-                else
+                if (Unsafe.AreSame(ref bucket, ref lastBucket)) {
+                    var buckets = self._Buckets;
+                    bucket = ref MemoryMarshal.GetArrayDataReference(buckets);
+                    // We re-loaded Buckets, so it may be a different array than it was when we started.
+                    // If this is the case, it's impossible to continue since we will never reach initialBucket.
+                    if (!Unsafe.AreSame(ref Unsafe.Add(ref bucket, buckets.Length - 1), ref lastBucket))
+                        ThrowConcurrentModification();
+                } else
                     bucket = ref Unsafe.Add(ref bucket, 1);
 
                 if (Unsafe.AreSame(ref bucket, ref initialBucket))
@@ -64,7 +69,7 @@ namespace SimdDictionary {
 
             // Will attempt to walk backwards through the buckets you previously visited.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Retreat (SimdDictionary<K, V> self) {
+            public bool Retreat (ref Bucket firstBucket) {
                 // We can't retreat when standing on our initial bucket.
                 if (Unsafe.AreSame(ref bucket, ref initialBucket))
                     return false;
@@ -144,9 +149,20 @@ namespace SimdDictionary {
         internal void AdjustCascadeCounts (
             LoopingBucketEnumerator enumerator, bool increase
         ) {
+            // Early-out before doing setup work
+            if (Unsafe.AreSame(ref enumerator.bucket, ref enumerator.initialBucket))
+                return;
+
+            var buckets = _Buckets;
+            ref var firstBucket = ref MemoryMarshal.GetArrayDataReference(buckets);
+            ref var lastBucket = ref Unsafe.Add(ref firstBucket, buckets.Length - 1);
+            // The array may have changed since we initially loaded it.
+            if (!Unsafe.AreSame(ref lastBucket, ref enumerator.lastBucket))
+                ThrowConcurrentModification();
+
             // We may have cascaded out of a previous bucket; if so, scan backwards and update
             //  the cascade count for every bucket we previously scanned.
-            while (enumerator.Retreat(this)) {
+            while (enumerator.Retreat(ref firstBucket)) {
                 // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
                 var cascadeCount = enumerator.bucket.CascadeCount;
                 if (increase) {
@@ -155,7 +171,7 @@ namespace SimdDictionary {
                         enumerator.bucket.CascadeCount = (byte)(cascadeCount + 1);
                 } else {
                     if (cascadeCount == 0)
-                        Environment.FailFast("Corrupted dictionary bucket cascade slot");
+                        ThrowCorrupted();
                     // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
                     //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
                     // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.

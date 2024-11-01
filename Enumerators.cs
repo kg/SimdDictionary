@@ -36,7 +36,7 @@ namespace SimdDictionary {
             bool ICollection<K>.IsReadOnly => true;
 
             void ICollection<K>.Add (K item) =>
-                throw new InvalidOperationException();
+                ThrowInvalidOperation();
 
             void ICollection<K>.Clear () =>
                 Dictionary.Clear();
@@ -101,14 +101,16 @@ namespace SimdDictionary {
             bool ICollection<V>.IsReadOnly => true;
 
             void ICollection<V>.Add (V item) =>
-                throw new InvalidOperationException();
+                ThrowInvalidOperation();
 
             void ICollection<V>.Clear () =>
                 Dictionary.Clear();
 
             // FIXME
-            bool ICollection<V>.Contains (V item) =>
-                throw new InvalidOperationException();
+            bool ICollection<V>.Contains (V item) {
+                ThrowInvalidOperation();
+                return false;
+            }
 
             void ICollection<V>.CopyTo (V[] array, int arrayIndex) {
                 // FIXME: Use EnumerateBuckets

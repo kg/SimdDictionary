@@ -5,6 +5,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
@@ -167,7 +168,7 @@ namespace SimdDictionary {
                         ok = true;
                         break;
                     }
-                } while (enumerator.Advance());
+                } while (enumerator.Advance(this));
 
                 if (!ok)
                     return false;
@@ -257,7 +258,7 @@ namespace SimdDictionary {
                         return result;
                 } else
                     return result;
-            } while (enumerator.Advance());
+            } while (enumerator.Advance(this));
 
             return -1;
         }
@@ -342,7 +343,7 @@ namespace SimdDictionary {
 
                     return InsertResult.OkAddedNew;
                 }
-            } while (enumerator.Advance());
+            } while (enumerator.Advance(this));
 
             return InsertResult.CorruptedInternalState;
         }
@@ -422,7 +423,7 @@ namespace SimdDictionary {
                 // Otherwise, we'd scan the whole table fruitlessly looking for a matching key.
                 if (enumerator.bucket.CascadeCount == 0)
                     return false;
-            } while (enumerator.Advance());
+            } while (enumerator.Advance(this));
 
             return false;
         }
@@ -433,7 +434,7 @@ namespace SimdDictionary {
                 var entries = (Span<Entry>)_Entries;
                 int index = FindKey(key, entries);
                 if (index < 0)
-                    throw new KeyNotFoundException($"Key not found: {key}");
+                    ThrowKeyNotFound();
                 return entries[index].Value;
             }
             set {
@@ -446,7 +447,8 @@ namespace SimdDictionary {
                         Resize(_GrowAtCount * 2);
                         goto retry;
                     case InsertResult.CorruptedInternalState:
-                        throw new Exception("Corrupted internal state");
+                        ThrowCorrupted();
+                        return;
                 }
             }
         }
@@ -487,7 +489,7 @@ namespace SimdDictionary {
         public void Add (K key, V value) {
             var ok = TryAdd(key, value);
             if (!ok)
-                throw new ArgumentException($"Key already exists: {key}");
+                ThrowKeyNotFound();
         }
 
         public bool TryAdd (K key, V value) {
@@ -500,7 +502,8 @@ namespace SimdDictionary {
                     Resize(_GrowAtCount * 2);
                     goto retry;
                 case InsertResult.CorruptedInternalState:
-                    throw new Exception("Corrupted internal state");
+                    ThrowCorrupted();
+                    return false;
                 default:
                     return false;
             }
@@ -703,6 +706,30 @@ namespace SimdDictionary {
 
         void IDeserializationCallback.OnDeserialization (object? sender) {
             throw new NotImplementedException();
+        }
+
+        [DoesNotReturn]
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        internal static void ThrowInvalidOperation () {
+            throw new InvalidOperationException();
+        }
+
+        [DoesNotReturn]
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        internal static void ThrowCorrupted () {
+            throw new Exception("Corrupted dictionary internal state detected");
+        }
+
+        [DoesNotReturn]
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        internal static void ThrowConcurrentModification () {
+            throw new Exception("Concurrent modification of dictionary detected");
+        }
+
+        [DoesNotReturn]
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        internal static void ThrowKeyNotFound () {
+            throw new KeyNotFoundException();
         }
     }
 }
