@@ -450,10 +450,9 @@ namespace SimdDictionary {
 
                 bucket.Suffixes = default;
                 if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>()) {
-                    // Performs a method call for the clear instead of being inlined
+                    // FIXME: Performs a method call for the clear instead of being inlined
                     // var s = MemoryMarshal.CreateSpan(ref bucket.Pairs.Pair0, BucketSizeI);
                     // s.Clear();
-#if UNROLLED_CLEAR_WITH_REFS
                     ref var pair = ref bucket.Pairs.Pair0;
                     // 4-wide unrolled bucket clear
                     while (c >= 4) {
@@ -469,9 +468,6 @@ namespace SimdDictionary {
                         pair = ref Unsafe.Add(ref pair, 1);
                         c--;
                     }
-#else
-                    bucket.Pairs = default;
-#endif
                 }
 
                 return true;
@@ -485,13 +481,9 @@ namespace SimdDictionary {
                 return;
 
             _Count = 0;
-#if SMART_CLEAR
             // FIXME: Only do this if _Count is below say 0.5x?
             var c = new ClearCallback();
             EnumerateBuckets(ref c);
-#else
-            Array.Clear(_Buckets);
-#endif
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
@@ -502,7 +494,7 @@ namespace SimdDictionary {
         public bool ContainsKey (K key) =>
             !Unsafe.IsNullRef(ref FindKey(key));
 
-        internal struct ContainsValueCallback : IBucketCallback {
+        internal struct ContainsValueCallback : IPairCallback {
             public readonly V Value;
             public bool Result;
 
@@ -512,13 +504,10 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket) {
-                // We could micro-optimize this, but we don't need to - it's already faster than SCG
-                for (int j = 0; j < bucket.Count; j++) {
-                    if (EqualityComparer<V>.Default.Equals(bucket.Pairs[j].Value, Value)) {
-                        Result = true;
-                        return false;
-                    }
+            public bool Pair (ref Pair pair) {
+                if (EqualityComparer<V>.Default.Equals(pair.Value, Value)) {
+                    Result = true;
+                    return false;
                 }
                 return true;
             }
@@ -529,7 +518,7 @@ namespace SimdDictionary {
                 return false;
 
             var callback = new ContainsValueCallback(value);
-            EnumerateBuckets(ref callback);
+            EnumeratePairs(ref callback);
             return callback.Result;
         }
 
@@ -566,7 +555,7 @@ namespace SimdDictionary {
         public object Clone () =>
             new SimdDictionary<K, V>(this);
 
-        private struct CopyToKvp : IBucketCallback {
+        private struct CopyToKvp : IPairCallback {
             public readonly KeyValuePair<K, V>[] Array;
             public int Index;
 
@@ -576,17 +565,13 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket) {
-                for (int j = 0; j < bucket.Count; j++) {
-                    ref var pair = ref bucket.Pairs[j];
-                    Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
-                }
-
+            public bool Pair (ref Pair pair) {
+                Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
                 return true;
             }
         }
 
-        private struct CopyToDictionaryEntry : IBucketCallback {
+        private struct CopyToDictionaryEntry : IPairCallback {
             public readonly DictionaryEntry[] Array;
             public int Index;
 
@@ -596,17 +581,13 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket) {
-                for (int j = 0; j < bucket.Count; j++) {
-                    ref var pair = ref bucket.Pairs[j];
-                    Array[Index++] = new DictionaryEntry(pair.Key, pair.Value);
-                }
-
+            public bool Pair (ref Pair pair) {
+                Array[Index++] = new DictionaryEntry(pair.Key, pair.Value);
                 return true;
             }
         }
 
-        private struct CopyToObject : IBucketCallback {
+        private struct CopyToObject : IPairCallback {
             public readonly object[] Array;
             public int Index;
 
@@ -616,12 +597,8 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Bucket (ref Bucket bucket) {
-                for (int j = 0; j < bucket.Count; j++) {
-                    ref var pair = ref bucket.Pairs[j];
-                    Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
-                }
-
+            public bool Pair (ref Pair pair) {
+                Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
                 return true;
             }
         }
@@ -636,13 +613,13 @@ namespace SimdDictionary {
 
             if (array is KeyValuePair<K, V>[] kvp) {
                 var c = new CopyToKvp(kvp, index);
-                EnumerateBuckets(ref c);
+                EnumeratePairs(ref c);
             } else if (array is DictionaryEntry[] de) {
                 var c = new CopyToDictionaryEntry(de, index);
-                EnumerateBuckets(ref c);
+                EnumeratePairs(ref c);
             } else if (array is object[] o) {
                 var c = new CopyToObject(o, index);
-                EnumerateBuckets(ref c);
+                EnumeratePairs(ref c);
             } else
                 throw new ArgumentException("Unsupported destination array type");
         }

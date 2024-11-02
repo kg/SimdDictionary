@@ -107,6 +107,30 @@ namespace SimdDictionary {
             }
         }
 
+        // Callback is passed by-ref so it can be used to store results from the enumeration operation
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnumeratePairs<TCallback> (ref TCallback callback)
+            where TCallback : struct, IPairCallback {
+            // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
+            var buckets = (Span<Bucket>)_Buckets;
+            ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
+                lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
+
+            while (true) {
+                ref var pair = ref bucket.Pairs.Pair0;
+                for (int i = 0, c = bucket.Count; i < c; i++) {
+                    if (!callback.Pair(ref pair))
+                        return;
+                    pair = ref Unsafe.Add(ref pair, 1);
+                }
+
+                if (!Unsafe.AreSame(ref bucket, ref lastBucket))
+                    bucket = ref Unsafe.Add(ref bucket, 1);
+                else
+                    return;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static unsafe int FindSuffixInBucket (ref Bucket bucket, Vector128<byte> searchVector, int bucketCount) {
 #if !FORCE_SCALAR_IMPLEMENTATION

@@ -104,10 +104,16 @@ namespace SimdDictionary {
             static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
         }
 
-        // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
+        // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. Clear)
         internal interface IBucketCallback {
             // Return false to stop iteration
             abstract bool Bucket (ref Bucket bucket);
+        }
+
+        // Used to encapsulate operations that enumerate all the occupied slots synchronously (i.e. CopyTo)
+        internal interface IPairCallback {
+            // Return false to stop iteration
+            abstract bool Pair (ref Pair pair);
         }
     }
 }
