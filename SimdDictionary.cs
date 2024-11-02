@@ -115,33 +115,27 @@ namespace SimdDictionary {
             // HACK: Ensure we store a new larger bucket array before storing the fastModMultiplier for the larger size.
             // This ensures that concurrent modification will not produce a bucket index that is too big.
             Thread.MemoryBarrier();
-            // FIXME: How do we guard this against concurrent modification?
             _fastModMultiplier = fastModMultiplier;
+
             // FIXME: In-place rehashing
-            if ((oldBuckets != EmptyBuckets) && (_Count > 0))
-                if (!TryRehash(oldBuckets))
-                    Environment.FailFast("Failed to rehash dictionary for resize operation");
+            if ((oldBuckets != EmptyBuckets) && (_Count > 0)) {
+                var c = new RehashCallback(this);
+                EnumeratePairs(oldBuckets, ref c);
+            }
         }
 
-        internal bool TryRehash (Bucket[] _oldBuckets) {
-            var oldBuckets = (Span<Bucket>)_oldBuckets;
-            for (int i = 0; i < oldBuckets.Length; i++) {
-                var baseIndex = i * BucketSizeI;
-                ref var bucket = ref oldBuckets[i];
+        internal struct RehashCallback : IPairCallback {
+            public readonly SimdDictionary<K, V> Self;
 
-                for (int j = 0, c = bucket.Count; j < c; j++) {
-                    Debug.Assert(c <= BucketSizeI);
-                    if (bucket.GetSlot(j) == 0)
-                        continue;
-
-                    ref var pair = ref bucket.Pairs[j];
-
-                    if (TryInsert(pair.Key, pair.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
-                        return false;
-                }
+            public RehashCallback (SimdDictionary<K, V> self) {
+                Self = self;
             }
 
-            return true;
+            public bool Pair (ref Pair pair) {
+                if (Self.TryInsert(pair.Key, pair.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                    ThrowCorrupted();
+                return true;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -483,7 +477,7 @@ namespace SimdDictionary {
             _Count = 0;
             // FIXME: Only do this if _Count is below say 0.5x?
             var c = new ClearCallback();
-            EnumerateBuckets(ref c);
+            EnumerateBuckets(_Buckets, ref c);
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
@@ -518,7 +512,7 @@ namespace SimdDictionary {
                 return false;
 
             var callback = new ContainsValueCallback(value);
-            EnumeratePairs(ref callback);
+            EnumeratePairs(_Buckets, ref callback);
             return callback.Result;
         }
 
@@ -613,13 +607,13 @@ namespace SimdDictionary {
 
             if (array is KeyValuePair<K, V>[] kvp) {
                 var c = new CopyToKvp(kvp, index);
-                EnumeratePairs(ref c);
+                EnumeratePairs(_Buckets, ref c);
             } else if (array is DictionaryEntry[] de) {
                 var c = new CopyToDictionaryEntry(de, index);
-                EnumeratePairs(ref c);
+                EnumeratePairs(_Buckets, ref c);
             } else if (array is object[] o) {
                 var c = new CopyToObject(o, index);
-                EnumeratePairs(ref c);
+                EnumeratePairs(_Buckets, ref c);
             } else
                 throw new ArgumentException("Unsupported destination array type");
         }

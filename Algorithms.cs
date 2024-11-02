@@ -42,6 +42,7 @@ namespace SimdDictionary {
                 initialBucket = ref bucket;
             }
 
+            // HACK: Outlining this method doesn't reduce code size, so just inline it.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ref Bucket GetFirstBucket (SimdDictionary<K, V> self) {
                 // In the common case (given an optimal hash) we won't actually need the address of the first bucket,
@@ -89,12 +90,9 @@ namespace SimdDictionary {
 
         // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnumerateBuckets<TCallback> (ref TCallback callback)
+        private void EnumerateBuckets<TCallback> (Span<Bucket> buckets, ref TCallback callback)
             where TCallback : struct, IBucketCallback {
-            // We can't early-out if Count is 0 here since this could be invoked by Clear
-
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
-            var buckets = (Span<Bucket>)_Buckets;
             ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
                 lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
 
@@ -109,10 +107,9 @@ namespace SimdDictionary {
 
         // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnumeratePairs<TCallback> (ref TCallback callback)
+        private void EnumeratePairs<TCallback> (Span<Bucket> buckets, ref TCallback callback)
             where TCallback : struct, IPairCallback {
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
-            var buckets = (Span<Bucket>)_Buckets;
             ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
                 lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
 
