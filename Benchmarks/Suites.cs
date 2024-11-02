@@ -243,10 +243,22 @@ namespace Benchmarks {
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     public class StringLookup {
+        public sealed class OpaqueComparer : IEqualityComparer<string> {
+            public readonly StringComparer ActualComparer = StringComparer.Ordinal;
+
+            public bool Equals (string? x, string? y) {
+                return ActualComparer.Equals(x, y);
+            }
+
+            public int GetHashCode ([DisallowNull] string obj) {
+                return ActualComparer.GetHashCode(obj);
+            }
+        }
+
         const int Size = 40960;
 
-        public Dictionary<string, long> BCL = new (Size);
-        public SimdDictionary<string, long> SIMD = new (Size);
+        public Dictionary<string, long> BCL = new (Size, new OpaqueComparer());
+        public SimdDictionary<string, long> SIMD = new (Size, new OpaqueComparer());
         public List<string> Strings = new (Size);
 
         [GlobalSetup]

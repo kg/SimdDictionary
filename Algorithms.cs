@@ -20,7 +20,7 @@ namespace SimdDictionary {
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
         internal ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
-            // The current size is BARELY small enough for TryGetValue to run without touching stack. TryInsert for reftypes still touches stack.
+            // The current size is small enough for TryGetValue to have a register to spare, and for TryInsert to barely avoid touching stack.
             public ref Bucket bucket, lastBucket;
             public ref Bucket initialBucket;
 
