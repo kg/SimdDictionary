@@ -7,7 +7,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Text;
 
 namespace SimdDictionary {
     public partial class SimdDictionary<K, V>
@@ -17,37 +16,28 @@ namespace SimdDictionary {
             // User-specified capacity values will be increased by this percentage in order
             //  to maintain an ideal load factor. FIXME: 120 isn't right
             OversizePercentage = 120,
-            // Make buckets 64 bytes (12 4-byte entry indices + 16-byte suffix vector) to turn imuls/idivs into shifts
-            BucketSizeI = 12,
+            BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;
 
-        [DebuggerDisplay("{Key}, {Value} NextFree={NextFreeSlot}")]
-        internal struct Entry {
+        internal struct Pair {
             public K Key;
             public V Value;
-            public int NextFreeSlotPlusOne;
-
-            public bool IsEmpty =>
-                (NextFreeSlotPlusOne > 0) ||
-                (EqualityComparer<K>.Default.Equals(Key, default) &&
-                    EqualityComparer<V>.Default.Equals(Value, default));
-
-            public int NextFreeSlot => unchecked(NextFreeSlotPlusOne - 1);
         }
         
         // This size must match or exceed BucketSizeI
-        [InlineArray(12)]
-        internal struct InlineIndexArray {
-            public int Index0;
+        [InlineArray(14)]
+        internal struct InlinePairArray {
+            public Pair Pair0;
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 16)]
         internal struct Bucket {
             public Vector128<byte> Suffixes;
-            public InlineIndexArray IndicesPlusOne;
-
-            internal byte _Count => Count;
+            public InlinePairArray Pairs;
+            // For 8-byte keys + values this makes a bucket 256 bytes, changing the native code for the lookup
+            //  buckets[index] from an imul to a shift
+            // public Vector128<byte> Padding;
 
             public ref byte Count {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -77,21 +67,6 @@ namespace SimdDictionary {
                 // index &= 15;
                 Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Suffixes), index) = value;
             }
-
-            public override string ToString () {
-                var sb = new StringBuilder();
-                sb.Append($"#{Count} Cascaded={CascadeCount} Suffixes={Suffixes} Indices=");
-                for (int i = 0; i < Count; i++) {
-                    if (i > 0)
-                        sb.Append(',');
-                    var idx = IndicesPlusOne[i] - 1;
-                    if (idx == -1)
-                        sb.Append("empty");
-                    else
-                        sb.Append(idx);
-                }
-                return sb.ToString();
-            }
         }
 
         public enum InsertMode {
@@ -99,6 +74,9 @@ namespace SimdDictionary {
             EnsureUnique,
             // Overwrite the value if a matching key is found
             OverwriteValue,
+            // Don't scan for existing matches before inserting into the bucket. This is only
+            //  safe to do when copying an existing dictionary or rehashing an existing dictionary
+            Rehashing
         }
 
         public enum InsertResult {
@@ -117,21 +95,19 @@ namespace SimdDictionary {
         // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
         //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
         internal interface IKeySearcher {
-            static abstract int FindKeyInBucket (
+            static abstract ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, 
-                Span<Entry> pairs, 
-                int startIndexInBucket, int bucketCount,
+                [UnscopedRef] ref Bucket bucket, int startIndexInBucket, int bucketCount,
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             );
 
             static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
         }
 
-        // Used to encapsulate operations that enumerate all the entries synchronously (i.e. CopyTo)
-        internal interface IEntryCallback {
+        // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. CopyTo)
+        internal interface IBucketCallback {
             // Return false to stop iteration
-            abstract bool Entry (ref Entry entry);
+            abstract bool Bucket (ref Bucket bucket);
         }
     }
 }

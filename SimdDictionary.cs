@@ -17,31 +17,25 @@ namespace SimdDictionary {
         ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
         where K : notnull
     {
-        private const int MinimumEntryCapacity = 1,
-            FreeListIndexPlusOne_Occupied = 0,
-            FreeListIndexPlusOne_EndOfFreeList = int.MaxValue;
+        private ulong _fastModMultiplier;
 
         // TODO: Make these reference types initialized on demand / add cache fields for the accessors that box them.
         public KeyCollection Keys => new KeyCollection(this);
         public ValueCollection Values => new ValueCollection(this);
         public readonly IEqualityComparer<K>? Comparer;
-        private ulong _fastModMultiplier;
         // It's important for an empty dictionary to have both count and growatcount be 0
         private int _Count = 0, 
-            _GrowAtCount = 0,
-            _FreeListStart = -2;
+            _GrowAtCount = 0;
 
 #pragma warning disable CA1825
         // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
         //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
         //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
         //  we're empty.
-        private static readonly Bucket[] EmptyBuckets = [ default ];
-        private static readonly Entry[] EmptyEntries = [ default ];
+        private static readonly Bucket[] EmptyBuckets = new Bucket[1];
 #pragma warning restore CA1825
 
         private Bucket[] _Buckets = EmptyBuckets;
-        private Entry[] _Entries = EmptyEntries;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -70,13 +64,10 @@ namespace SimdDictionary {
             Comparer = source.Comparer;
             _Count = source._Count;
             _GrowAtCount = source._GrowAtCount;
-            _FreeListStart = source._FreeListStart;
             _fastModMultiplier = source._fastModMultiplier;
             if (source._Buckets != EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
-                _Entries = new Entry[source._Entries.Length];
-                Array.Copy(source._Buckets, _Buckets, _Buckets.Length);
-                Array.Copy(source._Entries, _Entries, _Count);
+                Array.Copy(source._Buckets, _Buckets, source._Buckets.Length);
             }
         }
 
@@ -103,8 +94,8 @@ namespace SimdDictionary {
 
             checked {
                 capacity = (int)((long)capacity * OversizePercentage / 100);
-                if (capacity < MinimumEntryCapacity)
-                    capacity = MinimumEntryCapacity;
+                if (capacity < 1)
+                    capacity = 1;
 
                 bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
 
@@ -114,28 +105,19 @@ namespace SimdDictionary {
 
             var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
-            var oldEntries = _Entries;
             checked {
-                // Under-allocate values array for small (< 1 bucket worth of items) dictionaries
-                if (capacity <= BucketSizeI)
-                    _GrowAtCount = capacity;
-                else
-                    _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
+                _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
-            var newEntries = new Entry[_GrowAtCount];
-            Array.Copy(oldEntries, newEntries, oldEntries.Length);
-            // Store the larger entries array first before storing a buckets array that could end up referencing an out-of-range index
-            _Entries = newEntries;
-            Thread.MemoryBarrier();
-            // Ensure we store a new larger bucket array before storing the fastModMultiplier for the larger size.
-            // This ensures that concurrent modification will not produce a bucket index that is too big.
             _Buckets = newBuckets;
+            // HACK: Ensure we store a new larger bucket array before storing the fastModMultiplier for the larger size.
+            // This ensures that concurrent modification will not produce a bucket index that is too big.
             Thread.MemoryBarrier();
             // FIXME: How do we guard this against concurrent modification?
             _fastModMultiplier = fastModMultiplier;
+            // FIXME: In-place rehashing
             if ((oldBuckets != EmptyBuckets) && (_Count > 0))
                 if (!TryRehash(oldBuckets))
                     Environment.FailFast("Failed to rehash dictionary for resize operation");
@@ -143,35 +125,20 @@ namespace SimdDictionary {
 
         internal bool TryRehash (Bucket[] _oldBuckets) {
             var oldBuckets = (Span<Bucket>)_oldBuckets;
-            var newBuckets = (Span<Bucket>)_Buckets;
-            var entries = (Span<Entry>)_Entries;
-            var comparer = Comparer;
-            var count = _Count;
+            for (int i = 0; i < oldBuckets.Length; i++) {
+                var baseIndex = i * BucketSizeI;
+                ref var bucket = ref oldBuckets[i];
 
-            for (int i = 0; i < count; i++) {
-                ref var entry = ref entries[i];
+                for (int j = 0, c = bucket.Count; j < c; j++) {
+                    Debug.Assert(c <= BucketSizeI);
+                    if (bucket.GetSlot(j) == 0)
+                        continue;
 
-                uint hashCode;
-                if (typeof(K).IsValueType && (comparer == null)) {
-                    hashCode = DefaultComparerKeySearcher.GetHashCode(comparer, entry.Key);
-                } else {
-                    hashCode = ComparerKeySearcher.GetHashCode(comparer, entry.Key);
+                    ref var pair = ref bucket.Pairs[j];
+
+                    if (TryInsert(pair.Key, pair.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                        return false;
                 }
-
-                var enumerator = new LoopingBucketEnumerator(this, hashCode);
-                var suffix = GetHashSuffix(hashCode);
-                var ok = false;
-                do {
-                    if (TryInsertIntoBucket(ref enumerator.bucket, suffix, enumerator.bucket.Count, i)) {
-                        // Increase the cascade counters for the buckets we checked before this one.
-                        AdjustCascadeCounts(enumerator, true);
-                        ok = true;
-                        break;
-                    }
-                } while (enumerator.Advance(this));
-
-                if (!ok)
-                    return false;
             }
 
             return true;
@@ -203,12 +170,7 @@ namespace SimdDictionary {
         //  it is never zero (because a zero suffix indicates an empty slot.)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static byte GetHashSuffix (uint hashCode) {
-            // The bottom bits of the hash form the bucket index, so we use the top bits as a suffix
-            // We could use a lower shift to try and improve tail collision performance,
-            //  but the improvement from that is pretty small and it makes head collisions worse.
-            // The right solution is just to use a good hash function.
-            const int hashShift = 24;
-            var result = unchecked((byte)(hashCode >> hashShift));
+            var result = unchecked((byte)hashCode);
             // Assuming the JIT turns this into a cmov, this should be better on average
             //  since it nearly doubles the number of possible suffixes, improving collision
             //  resistance and reducing the odds of having to check multiple keys.
@@ -227,24 +189,21 @@ namespace SimdDictionary {
             ));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int FindKey (K key, Span<Entry> entries) {
+        internal ref Pair FindKey (K key) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
-                return FindKey<DefaultComparerKeySearcher>(key, null, entries);
+                return ref FindKey<DefaultComparerKeySearcher>(key, null);
             else
-                return FindKey<ComparerKeySearcher>(key, comparer, entries);
+                return ref FindKey<ComparerKeySearcher>(key, comparer);
         }
 
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is roughly halved.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer, Span<Entry> entries)
+        internal ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            // Vector128.Create(suffix) will get LICM'd in many cases even if it's unhelpful, so just
-            //  consistently pre-create the search vector manually. On some arches this is probably good.
-            // See also https://github.com/dotnet/runtime/issues/108092
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
@@ -252,15 +211,15 @@ namespace SimdDictionary {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
                 int bucketCount = enumerator.bucket.Count, 
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                var result = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, entries, startIndex, bucketCount, comparer, key, out _);
-                if (result < 0) {
+                ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
+                if (Unsafe.IsNullRef(ref pair)) {
                     if (enumerator.bucket.CascadeCount == 0)
-                        return result;
+                        return ref Unsafe.NullRef<Pair>();
                 } else
-                    return result;
+                    return ref pair;
             } while (enumerator.Advance(this));
 
-            return -1;
+            return ref Unsafe.NullRef<Pair>();
         }
 
         // public for Disasmo
@@ -274,15 +233,16 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, int entryIndex) {
+        internal static bool TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, K key, V value) {
             if (bucketCount >= BucketSizeI)
                 return false;
 
             unchecked {
-                ref var destinationPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, bucketCount);
+                ref var destination = ref Unsafe.Add(ref bucket.Pairs.Pair0, bucketCount);
                 bucket.Count = (byte)(bucketCount + 1);
                 bucket.SetSlot((nuint)bucketCount, suffix);
-                destinationPlusOne = entryIndex + 1;
+                destination.Key = key;
+                destination.Value = value;
             }
 
             return true;
@@ -293,51 +253,33 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : struct, IKeySearcher 
         {
-            var freeListStart = _FreeListStart;
-            var newEntryIndex = freeListStart >= 0 ? freeListStart : _Count;
-            var needToGrow = (newEntryIndex >= _GrowAtCount);
+            var needToGrow = (_Count >= _GrowAtCount);
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
-            // Pipelining: This is almost never true, so don't branch off it immediately.
-            if (needToGrow)
-                return InsertResult.NeedToGrow;
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
-            // You should have already made sure there was enough space for your value - entryIndex must be valid
-            Debug.Assert((newEntryIndex >= 0) && (newEntryIndex < _Entries.Length));
+            // Pipelining: Perform the actual branch later, since in the common case we won't need to grow.
+            if (needToGrow)
+                return InsertResult.NeedToGrow;
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
-            Span<Entry> pairs = _Entries;
             do {
                 int bucketCount = enumerator.bucket.Count;
-                int startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                int entryIndex = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, pairs, startIndex, bucketCount, comparer, key, out _);
+                if (mode != InsertMode.Rehashing) {
+                    int startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
+                    ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
 
-                if (entryIndex >= 0) {
-                    if (mode == InsertMode.OverwriteValue) {
-                        ref var entry = ref pairs[entryIndex];
-                        entry.Value = value;
-                        return InsertResult.OkOverwroteExisting;
-                    } else
-                        return InsertResult.KeyAlreadyPresent;
-                } else if (startIndex < BucketSizeI) {
-                    // FIXME: Suffix collision. Track these for string rehashing anti-DoS mitigation!
+                    if (!Unsafe.IsNullRef(ref pair)) {
+                        if (mode == InsertMode.EnsureUnique)
+                            return InsertResult.KeyAlreadyPresent;
+                        else {
+                            pair.Value = value;
+                            return InsertResult.OkOverwroteExisting;
+                        }
+                    } else if (startIndex < BucketSizeI) {
+                        // FIXME: Suffix collision. Track these for string rehashing anti-DoS mitigation!
+                    }
                 }
 
-                if (TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, newEntryIndex)) {
-                    _Count++;
-
-                    ref var entry = ref pairs[newEntryIndex];
-#if DEBUG
-                    if (!entry.IsEmpty)
-                        throw new Exception();
-#endif
-                    entry.Key = key;
-                    entry.Value = value;
-                    var nextFreeSlot = entry.NextFreeSlot;
-                    if (nextFreeSlot >= 0) {
-                        _FreeListStart = (nextFreeSlot != FreeListIndexPlusOne_EndOfFreeList) ? nextFreeSlot : -2;
-                        entry.NextFreeSlotPlusOne = FreeListIndexPlusOne_Occupied;
-                    }
-
+                if (TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, key, value)) {
                     // Increase the cascade counters for the buckets we checked before this one.
                     AdjustCascadeCounts(enumerator, true);
 
@@ -359,33 +301,26 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void RemoveFromBucket (ref Bucket bucket, int indexInBucket, int bucketCount) {
+        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, int bucketCount, ref Pair toRemove) {
             Debug.Assert(bucketCount > 0);
             unchecked {
                 int replacementIndexInBucket = bucketCount - 1;
                 bucket.Count = (byte)replacementIndexInBucket;
-                ref var toRemovePlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
-                ref var replacementPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, replacementIndexInBucket);
+                ref var replacement = ref Unsafe.Add(ref bucket.Pairs.Pair0, replacementIndexInBucket);
                 // This rotate-back algorithm makes removes more expensive than if we were to just always zero the slot.
                 // But then other algorithms like insertion get more expensive, since we have to search for a zero to replace...
-                if (!Unsafe.AreSame(ref toRemovePlusOne, ref replacementPlusOne)) {
+                if (!Unsafe.AreSame(ref toRemove, ref replacement)) {
                     // TODO: This is the only place in the find/insert/remove algorithms that actually needs indexInBucket.
                     // Can we refactor it away? The good news is RyuJIT optimizes it out entirely in find/insert.
                     bucket.SetSlot((uint)indexInBucket, bucket.GetSlot(replacementIndexInBucket));
                     bucket.SetSlot((uint)replacementIndexInBucket, 0);
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
-                        ref var entry = ref _Entries[unchecked(toRemovePlusOne - 1)];
-                        entry = default;
-                    }
-                    toRemovePlusOne = replacementPlusOne;
-                    replacementPlusOne = 0;
+                    toRemove = replacement;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>())
+                        replacement = default;
                 } else {
                     bucket.SetSlot((uint)indexInBucket, 0);
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>()) {
-                        ref var entry = ref _Entries[unchecked(toRemovePlusOne - 1)];
-                        entry = default;
-                    }
-                    toRemovePlusOne = 0;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>())
+                        toRemove = default;
                 }
             }
         }
@@ -399,21 +334,14 @@ namespace SimdDictionary {
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
-            Span<Entry> entries = _Entries;
             do {
                 int bucketCount = enumerator.bucket.Count,
                     startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                int entryIndex = TKeySearcher.FindKeyInBucket(ref enumerator.bucket, entries, startIndex, bucketCount, comparer, key, out int indexInBucket);
+                ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
-                if (entryIndex >= 0) {
+                if (!Unsafe.IsNullRef(ref pair)) {
                     _Count--;
-                    ref var entry = ref entries[entryIndex];
-                    if (RuntimeHelpers.IsReferenceOrContainsReferences<Entry>())
-                        entry = default;
-                    var fls = _FreeListStart;
-                    entry.NextFreeSlotPlusOne = fls >= 0 ? fls + 1 : FreeListIndexPlusOne_EndOfFreeList;
-                    _FreeListStart = entryIndex;
-                    RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount);
+                    RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount, ref pair);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
                     AdjustCascadeCounts(enumerator, false);
                     return true;
@@ -431,24 +359,23 @@ namespace SimdDictionary {
         public V this[K key] { 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
-                var entries = (Span<Entry>)_Entries;
-                int index = FindKey(key, entries);
-                if (index < 0)
-                    ThrowKeyNotFound();
-                return entries[index].Value;
+                ref var pair = ref FindKey(key);
+                if (Unsafe.IsNullRef(ref pair))
+                    throw new KeyNotFoundException($"Key not found: {key}");
+                return pair.Value;
             }
             set {
             retry:
                 var insertResult = TryInsert(key, value, InsertMode.OverwriteValue);
                 switch (insertResult) {
                     case InsertResult.OkAddedNew:
+                        _Count++;
                         return;
                     case InsertResult.NeedToGrow:
                         Resize(_GrowAtCount * 2);
                         goto retry;
                     case InsertResult.CorruptedInternalState:
-                        ThrowCorrupted();
-                        return;
+                        throw new Exception("Corrupted internal state");
                 }
             }
         }
@@ -489,7 +416,7 @@ namespace SimdDictionary {
         public void Add (K key, V value) {
             var ok = TryAdd(key, value);
             if (!ok)
-                ThrowKeyNotFound();
+                throw new ArgumentException($"Key already exists: {key}");
         }
 
         public bool TryAdd (K key, V value) {
@@ -497,13 +424,13 @@ namespace SimdDictionary {
             var insertResult = TryInsert(key, value, InsertMode.EnsureUnique);
             switch (insertResult) {
                 case InsertResult.OkAddedNew:
+                    _Count++;
                     return true;
                 case InsertResult.NeedToGrow:
                     Resize(_GrowAtCount * 2);
                     goto retry;
                 case InsertResult.CorruptedInternalState:
-                    ThrowCorrupted();
-                    return false;
+                    throw new Exception("Corrupted internal state");
                 default:
                     return false;
             }
@@ -512,6 +439,44 @@ namespace SimdDictionary {
         void ICollection<KeyValuePair<K, V>>.Add (KeyValuePair<K, V> item) =>
             Add(item.Key, item.Value);
 
+        internal struct ClearCallback : IBucketCallback {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Bucket (ref Bucket bucket) {
+                int c = bucket.Count;
+                if (c == 0) {
+                    bucket.CascadeCount = 0;
+                    return true;
+                }
+
+                bucket.Suffixes = default;
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>()) {
+                    // Performs a method call for the clear instead of being inlined
+                    // var s = MemoryMarshal.CreateSpan(ref bucket.Pairs.Pair0, BucketSizeI);
+                    // s.Clear();
+#if UNROLLED_CLEAR_WITH_REFS
+                    ref var pair = ref bucket.Pairs.Pair0;
+                    // 4-wide unrolled bucket clear
+                    while (c >= 4) {
+                        pair = default;
+                        Unsafe.Add(ref pair, 1) = default;
+                        Unsafe.Add(ref pair, 2) = default;
+                        Unsafe.Add(ref pair, 3) = default;
+                        pair = ref Unsafe.Add(ref pair, 4);
+                        c -= 4;
+                    }
+                    while (c != 0) {
+                        pair = default;
+                        pair = ref Unsafe.Add(ref pair, 1);
+                        c--;
+                    }
+#else
+                    bucket.Pairs = default;
+#endif
+                }
+
+                return true;
+            }
+        }
 
         // NOTE: In benchmarks this looks much slower than SCG clear, but that's because our backing array at 4096 is
         //  much bigger than SCG's, so we're just measuring how much slower Array.Clear is on a bigger array
@@ -520,23 +485,24 @@ namespace SimdDictionary {
                 return;
 
             _Count = 0;
-            _FreeListStart = -2;
-            // FIXME: Only clear occupied slots or slots on the freelist
-            Array.Clear(_Entries);
+#if SMART_CLEAR
+            // FIXME: Only do this if _Count is below say 0.5x?
+            var c = new ClearCallback();
+            EnumerateBuckets(ref c);
+#else
             Array.Clear(_Buckets);
+#endif
         }
 
         bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
-            var entries = (Span<Entry>)_Entries;
-            var index = FindKey(item.Key, entries);
-            return (index >= 0) && 
-                EqualityComparer<V>.Default.Equals(entries[index].Value, item.Value);
+            ref var pair = ref FindKey(item.Key);
+            return !Unsafe.IsNullRef(ref pair) && (pair.Value?.Equals(item.Value) == true);
         }
 
         public bool ContainsKey (K key) =>
-            FindKey(key, _Entries) >= 0;
+            !Unsafe.IsNullRef(ref FindKey(key));
 
-        internal struct ContainsValueCallback : IEntryCallback {
+        internal struct ContainsValueCallback : IBucketCallback {
             public readonly V Value;
             public bool Result;
 
@@ -546,10 +512,13 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Entry (ref Entry entry) {
-                if (EqualityComparer<V>.Default.Equals(entry.Value, Value)) {
-                    Result = true;
-                    return false;
+            public bool Bucket (ref Bucket bucket) {
+                // We could micro-optimize this, but we don't need to - it's already faster than SCG
+                for (int j = 0; j < bucket.Count; j++) {
+                    if (EqualityComparer<V>.Default.Equals(bucket.Pairs[j].Value, Value)) {
+                        Result = true;
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -560,7 +529,7 @@ namespace SimdDictionary {
                 return false;
 
             var callback = new ContainsValueCallback(value);
-            EnumerateOccupiedEntries(ref callback);
+            EnumerateBuckets(ref callback);
             return callback.Result;
         }
 
@@ -584,13 +553,12 @@ namespace SimdDictionary {
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue (K key, out V value) {
-            var entries = (Span<Entry>)_Entries;
-            var index = FindKey(key, entries);
-            if (index < 0) {
+            ref var pair = ref FindKey(key);
+            if (Unsafe.IsNullRef(ref pair)) {
                 value = default!;
                 return false;
             } else {
-                value = entries[index].Value;
+                value = pair.Value;
                 return true;
             }
         }
@@ -598,7 +566,7 @@ namespace SimdDictionary {
         public object Clone () =>
             new SimdDictionary<K, V>(this);
 
-        private struct CopyToKvp : IEntryCallback {
+        private struct CopyToKvp : IBucketCallback {
             public readonly KeyValuePair<K, V>[] Array;
             public int Index;
 
@@ -608,13 +576,17 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Entry (ref Entry entry) {
-                Array[Index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
+            public bool Bucket (ref Bucket bucket) {
+                for (int j = 0; j < bucket.Count; j++) {
+                    ref var pair = ref bucket.Pairs[j];
+                    Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
+                }
+
                 return true;
             }
         }
 
-        private struct CopyToDictionaryEntry : IEntryCallback {
+        private struct CopyToDictionaryEntry : IBucketCallback {
             public readonly DictionaryEntry[] Array;
             public int Index;
 
@@ -624,13 +596,17 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Entry (ref Entry entry) {
-                Array[Index++] = new DictionaryEntry(entry.Key, entry.Value);
+            public bool Bucket (ref Bucket bucket) {
+                for (int j = 0; j < bucket.Count; j++) {
+                    ref var pair = ref bucket.Pairs[j];
+                    Array[Index++] = new DictionaryEntry(pair.Key, pair.Value);
+                }
+
                 return true;
             }
         }
 
-        private struct CopyToObject : IEntryCallback {
+        private struct CopyToObject : IBucketCallback {
             public readonly object[] Array;
             public int Index;
 
@@ -640,8 +616,12 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Entry (ref Entry entry) {
-                Array[Index++] = new KeyValuePair<K, V>(entry.Key, entry.Value);
+            public bool Bucket (ref Bucket bucket) {
+                for (int j = 0; j < bucket.Count; j++) {
+                    ref var pair = ref bucket.Pairs[j];
+                    Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
+                }
+
                 return true;
             }
         }
@@ -656,13 +636,13 @@ namespace SimdDictionary {
 
             if (array is KeyValuePair<K, V>[] kvp) {
                 var c = new CopyToKvp(kvp, index);
-                EnumerateOccupiedEntries(ref c);
+                EnumerateBuckets(ref c);
             } else if (array is DictionaryEntry[] de) {
                 var c = new CopyToDictionaryEntry(de, index);
-                EnumerateOccupiedEntries(ref c);
+                EnumerateBuckets(ref c);
             } else if (array is object[] o) {
                 var c = new CopyToObject(o, index);
-                EnumerateOccupiedEntries(ref c);
+                EnumerateBuckets(ref c);
             } else
                 throw new ArgumentException("Unsupported destination array type");
         }

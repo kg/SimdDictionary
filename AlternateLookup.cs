@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
 
 namespace SimdDictionary
 {
@@ -11,8 +12,6 @@ namespace SimdDictionary
     }
 
     public partial class SimdDictionary<K, V> {
-        // FIXME
-        /*
         public readonly struct AlternateLookup<TAlternateKey>
             where TAlternateKey : notnull { // fixme: allows ref struct
 
@@ -33,7 +32,7 @@ namespace SimdDictionary
                     ref var pair = ref FindKey(key);
                     if (Unsafe.IsNullRef(ref pair))
                         throw new KeyNotFoundException($"Key {key} not found");
-                    return Dictionary._Values[pair.ValueIndex];
+                    return pair.Value;
                 }
             }
 
@@ -43,7 +42,7 @@ namespace SimdDictionary
                     value = default!;
                     return false;
                 } else {
-                    value = Dictionary._Values[pair.ValueIndex];
+                    value = pair.Value;
                     return true;
                 }
             }
@@ -55,18 +54,19 @@ namespace SimdDictionary
 
                 var comparer = Comparer;
                 var hashCode = FinalizeHashCode(unchecked((uint)comparer.GetHashCode(key)));
-                var enumerator = new LoopingBucketEnumerator(dictionary, hashCode);
                 var suffix = GetHashSuffix(hashCode);
+                var searchVector = Vector128.Create(suffix);
+                var enumerator = new LoopingBucketEnumerator(dictionary, hashCode);
                 do {
                     int bucketCount = enumerator.bucket.Count,
-                        startIndex = FindSuffixInBucket(ref enumerator.bucket, suffix, bucketCount);
+                        startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
                     ref var pair = ref FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
                     if (Unsafe.IsNullRef(ref pair)) {
                         if (enumerator.bucket.CascadeCount == 0)
                             return ref Unsafe.NullRef<Pair>();
                     } else
                         return ref pair;
-                } while (enumerator.Advance());
+                } while (enumerator.Advance(dictionary));
 
                 return ref Unsafe.NullRef<Pair>();
             }
@@ -96,6 +96,5 @@ namespace SimdDictionary
                 return ref Unsafe.NullRef<Pair>();
             }
         }
-        */
     }
 }

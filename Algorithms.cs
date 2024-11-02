@@ -42,7 +42,6 @@ namespace SimdDictionary {
                 initialBucket = ref bucket;
             }
 
-            // HACK: Outlining this method doesn't reduce code size, so just inline it.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ref Bucket GetFirstBucket (SimdDictionary<K, V> self) {
                 // In the common case (given an optimal hash) we won't actually need the address of the first bucket,
@@ -90,22 +89,19 @@ namespace SimdDictionary {
 
         // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnumerateOccupiedEntries<TCallback> (ref TCallback callback)
-            where TCallback : struct, IEntryCallback {
+        private void EnumerateBuckets<TCallback> (ref TCallback callback)
+            where TCallback : struct, IBucketCallback {
+            // We can't early-out if Count is 0 here since this could be invoked by Clear
+
             // FIXME: Using a foreach on this span produces an imul-per-iteration for some reason.
-            var entries = (Span<Entry>)_Entries;
-            ref Entry entry = ref MemoryMarshal.GetReference(entries),
-                lastEntry = ref Unsafe.Add(ref entry, entries.Length - 1);
+            var buckets = (Span<Bucket>)_Buckets;
+            ref Bucket bucket = ref MemoryMarshal.GetReference(buckets),
+                lastBucket = ref Unsafe.Add(ref bucket, buckets.Length - 1);
 
             while (true) {
-                bool ok;
-                if (entry.NextFreeSlotPlusOne <= 0)
-                    ok = callback.Entry(ref entry);
-                else
-                    ok = true;
-
-                if (ok && !Unsafe.AreSame(ref entry, ref lastEntry))
-                    entry = ref Unsafe.Add(ref entry, 1);
+                var ok = callback.Bucket(ref bucket);
+                if (ok && !Unsafe.AreSame(ref bucket, ref lastBucket))
+                    bucket = ref Unsafe.Add(ref bucket, 1);
                 else
                     break;
             }
@@ -181,9 +177,6 @@ namespace SimdDictionary {
             }
         }
 
-        internal static ref Entry EntryFromIndexPlusOneUnchecked (Span<Entry> entries, int indexPlusOne) =>
-            ref Unsafe.Add(ref MemoryMarshal.GetReference(entries), unchecked(indexPlusOne - 1));
-
 #pragma warning disable CS8619
         // These have to be structs so that the JIT will specialize callers instead of Canonizing them
         internal struct DefaultComparerKeySearcher : IKeySearcher {
@@ -194,33 +187,32 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static unsafe int FindKeyInBucket (
+            public static unsafe ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, Span<Entry> entries, int indexInBucket, int bucketCount, 
+                [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);
-                Debug.Assert(comparer == null);
 
                 int count = bucketCount - indexInBucket;
                 if (count <= 0)
-                    return -1;
+                    return ref Unsafe.NullRef<Pair>();
 
-                ref int indexPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
+                ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
                 while (true) {
-                    if (EqualityComparer<K>.Default.Equals(needle, EntryFromIndexPlusOneUnchecked(entries, indexPlusOne).Key)) {
+                    if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
-                        return unchecked(indexPlusOne - 1);
+                        return ref pair;
                     }
 
                     // NOTE: --count <= 0 produces an extra 'test' opcode
                     if (--count == 0)
-                        return -1;
+                        return ref Unsafe.NullRef<Pair>();
                     else
-                        indexPlusOne = ref Unsafe.Add(ref indexPlusOne, 1);
+                        pair = ref Unsafe.Add(ref pair, 1);
                 }
             }
         }
@@ -232,9 +224,9 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static unsafe int FindKeyInBucket (
+            public static unsafe ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
-                [UnscopedRef] ref Bucket bucket, Span<Entry> entries, int indexInBucket, int bucketCount, 
+                [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
                 IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
@@ -243,22 +235,24 @@ namespace SimdDictionary {
 
                 int count = bucketCount - indexInBucket;
                 if (count <= 0)
-                    return -1;
+                    return ref Unsafe.NullRef<Pair>();
 
-                ref int indexPlusOne = ref Unsafe.Add(ref bucket.IndicesPlusOne.Index0, indexInBucket);
+                ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
+                // FIXME: This loop spills two values to/from the stack every iteration, and it's not clear which.
+                // The ValueType-with-default-comparer one doesn't.
                 while (true) {
-                    if (comparer.Equals(needle, EntryFromIndexPlusOneUnchecked(entries, indexPlusOne).Key)) {
+                    if (comparer.Equals(needle, pair.Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
-                        return unchecked(indexPlusOne - 1);
+                        return ref pair;
                     }
 
                     // NOTE: --count <= 0 produces an extra 'test' opcode
                     if (--count == 0)
-                        return -1;
+                        return ref Unsafe.NullRef<Pair>();
                     else
-                        indexPlusOne = ref Unsafe.Add(ref indexPlusOne, 1);
+                        pair = ref Unsafe.Add(ref pair, 1);
                 }
             }
         }
