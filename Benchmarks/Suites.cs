@@ -113,7 +113,6 @@ namespace Benchmarks {
     }
 
     // FIXME
-    /*
     [MemoryDiagnoser()]
     [DisassemblyDiagnoser()]
     public class SimdAlternateLookup {
@@ -207,7 +206,6 @@ namespace Benchmarks {
             }
         }
     }
-    */
 
     public class ClearingWithRefs {
         const int Size = 40960;
@@ -275,6 +273,38 @@ namespace Benchmarks {
             for (int i = 0; i < Size; i++) {
                 var s = Strings[i];
                 if (!BCL.TryGetValue(s, out var value) || (value != i))
+                    Environment.FailFast("Failed");
+            }
+        }
+    }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class IntLookup {
+        const int Size = 102400;
+
+        public Dictionary<int, long> BCL = new (Size);
+        public SimdDictionary<int, long> SIMD = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            for (int i = 0; i < Size; i++) {
+                BCL.Add(i, i);
+                SIMD.Add(i, i);
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingSIMD () {
+            for (int i = 0; i < Size; i++) {
+                if (!SIMD.TryGetValue(i, out var value) || (value != i))
+                    Environment.FailFast("Failed");
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingBCL () {
+            for (int i = 0; i < Size; i++) {
+                if (!BCL.TryGetValue(i, out var value) || (value != i))
                     Environment.FailFast("Failed");
             }
         }
