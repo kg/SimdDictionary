@@ -27,7 +27,7 @@ namespace SimdDictionary {
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public LoopingBucketEnumerator (SimdDictionary<K, V> self, uint hashCode) {
-                var buckets = (Span<Bucket>)self._Buckets;
+                var buckets = new Span<Bucket>(self._Buckets);
                 var initialBucketIndex = self.BucketIndexForHashCode(hashCode, buckets);
                 Debug.Assert(buckets.Length > 0);
 

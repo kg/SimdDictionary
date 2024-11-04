@@ -16,18 +16,18 @@ public static class DisasmHarness
         PresentKey = (typeof(K) == typeof(string)) ? (K)(object)"1" : (K)(object)1L;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool TryGetValue (int i) =>
-        Dict.TryGetValue((i % 2) == 0 ? MissingKey : PresentKey, out var result);
+    public static bool TryGetValue (D dict, int i, K missingKey, K presentKey) =>
+        dict.TryGetValue((i % 2) == 0 ? missingKey : presentKey, out var result);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool TryAdd () =>
-        Dict.TryInsert(PresentKey, 1, D.InsertMode.EnsureUnique) == D.InsertResult.OkAddedNew;
+    public static bool TryAdd (D dict, K presentKey) =>
+        dict.TryInsert(presentKey, 1, D.InsertMode.EnsureUnique) == D.InsertResult.OkAddedNew;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool TryRemove (int i) =>
-        Dict.Remove((i % 2) == 0 ? MissingKey : PresentKey);
+    public static bool TryRemove (D dict, int i, K missingKey, K presentKey) =>
+        dict.Remove((i % 2) == 0 ? MissingKey : PresentKey);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void Clear () => 
-        Dict.Clear();
+    public static void Clear (D dict) => 
+        dict.Clear();
 }

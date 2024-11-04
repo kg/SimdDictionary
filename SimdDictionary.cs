@@ -12,6 +12,19 @@ using System.Runtime.Intrinsics;
 using System.Runtime.Serialization;
 
 namespace SimdDictionary {
+    internal static class SimdDictionaryHelpers<K, V>
+        where K : notnull {
+#pragma warning disable CA1825
+        // HACK: Move this readonly field out of the dictionary type so it doesn't have a cctor.
+        // This removes a cctor check from some hot paths (I think?)
+        // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
+        //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
+        //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
+        //  we're empty.
+        public static readonly SimdDictionary<K, V>.Bucket[] EmptyBuckets = new SimdDictionary<K, V>.Bucket[1];
+#pragma warning restore CA1825
+    }
+
     public partial class SimdDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
         ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
@@ -27,15 +40,7 @@ namespace SimdDictionary {
         private int _Count = 0, 
             _GrowAtCount = 0;
 
-#pragma warning disable CA1825
-        // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
-        //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
-        //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
-        //  we're empty.
-        private static readonly Bucket[] EmptyBuckets = new Bucket[1];
-#pragma warning restore CA1825
-
-        private Bucket[] _Buckets = EmptyBuckets;
+        private Bucket[] _Buckets = SimdDictionaryHelpers<K, V>.EmptyBuckets;
 
         public SimdDictionary () 
             : this (InitialCapacity, null) {
@@ -65,7 +70,7 @@ namespace SimdDictionary {
             _Count = source._Count;
             _GrowAtCount = source._GrowAtCount;
             _fastModMultiplier = source._fastModMultiplier;
-            if (source._Buckets != EmptyBuckets) {
+            if (source._Buckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
                 Array.Copy(source._Buckets, _Buckets, source._Buckets.Length);
             }
@@ -81,7 +86,7 @@ namespace SimdDictionary {
             if (Capacity >= capacity)
                 return;
 
-            int nextIncrement = (_Buckets == EmptyBuckets)
+            int nextIncrement = (_Buckets == SimdDictionaryHelpers<K, V>.EmptyBuckets)
                 ? capacity
                 : Capacity * 2;
 
@@ -118,7 +123,7 @@ namespace SimdDictionary {
             _fastModMultiplier = fastModMultiplier;
 
             // FIXME: In-place rehashing
-            if ((oldBuckets != EmptyBuckets) && (_Count > 0)) {
+            if ((oldBuckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) && (_Count > 0)) {
                 var c = new RehashCallback(this);
                 EnumeratePairs(oldBuckets, ref c);
             }
