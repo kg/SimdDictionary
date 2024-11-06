@@ -383,5 +383,22 @@ namespace Benchmarks {
                     throw new Exception("Result mismatch");
             }
         }
+
+        [Benchmark]
+        public void FindMissingSIMD () {
+            for (int i = 1; i < Size; i++) {
+                ref readonly var value = ref SIMD.FindValueOrNullRef(-i);
+                if (!Unsafe.IsNullRef(in value))
+                    throw new Exception("Key found");
+            }
+        }
+
+        [Benchmark]
+        public void FindMissingBCL () {
+            for (int i = 1; i < Size; i++) {
+                if (BCL.TryGetValue(-i, out var result))
+                    throw new Exception("Key found");
+            }
+        }
     }
 }

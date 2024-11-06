@@ -555,6 +555,8 @@ namespace SimdDictionary {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ref readonly V FindValueOrNullRef (K key) {
             ref var pair = ref FindKey(key);
+            if (Unsafe.IsNullRef(ref pair))
+                return ref Unsafe.NullRef<V>();
             return ref pair.Value;
         }
 
