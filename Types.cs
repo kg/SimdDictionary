@@ -20,12 +20,14 @@ namespace SimdDictionary {
             CountSlot = 14,
             CascadeSlot = 15;
 
-        internal struct Pair {
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct Pair {
             public K Key;
             public V Value;
         }
         
         // This size must match or exceed BucketSizeI
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
         [InlineArray(14)]
         internal struct InlinePairArray {
             public Pair Pair0;

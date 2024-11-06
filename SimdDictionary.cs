@@ -27,7 +27,7 @@ namespace SimdDictionary {
 
     public partial class SimdDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
-        ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable, IDeserializationCallback
+        ICollection<KeyValuePair<K, V>>, ICloneable
         where K : notnull
     {
         private ulong _fastModMultiplier;
@@ -450,8 +450,8 @@ namespace SimdDictionary {
                 bucket.Suffixes = default;
                 if (RuntimeHelpers.IsReferenceOrContainsReferences<Pair>()) {
                     // FIXME: Performs a method call for the clear instead of being inlined
-                    // var s = MemoryMarshal.CreateSpan(ref bucket.Pairs.Pair0, BucketSizeI);
-                    // s.Clear();
+                    // var pairs = (Span<Pair>)bucket.Pairs;
+                    // pairs.Clear();
                     ref var pair = ref bucket.Pairs.Pair0;
                     // 4-wide unrolled bucket clear
                     while (c >= 4) {
@@ -549,6 +549,13 @@ namespace SimdDictionary {
                 value = pair.Value;
                 return true;
             }
+        }
+
+        // Inlining required for disasmo
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ref readonly V FindValueOrNullRef (K key) {
+            ref var pair = ref FindKey(key);
+            return ref pair.Value;
         }
 
         public object Clone () =>
@@ -654,14 +661,6 @@ namespace SimdDictionary {
                 CopyTo(oa, 0);
             else
                 throw new ArgumentException("Unsupported destination array type", nameof(array));
-        }
-
-        void ISerializable.GetObjectData (SerializationInfo info, StreamingContext context) {
-            throw new NotImplementedException();
-        }
-
-        void IDeserializationCallback.OnDeserialization (object? sender) {
-            throw new NotImplementedException();
         }
 
         [DoesNotReturn]

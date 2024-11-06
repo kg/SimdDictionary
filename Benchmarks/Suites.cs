@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
@@ -318,6 +319,68 @@ namespace Benchmarks {
             for (int i = 0; i < Size; i++) {
                 if (!BCL.TryGetValue(i, out var value) || (value != i))
                     Environment.FailFast("Failed");
+            }
+        }
+    }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class BigStructLookup {
+        public unsafe struct BigStruct {
+            // Note that if InnerSize is too big, Bucket will hit an internal limitation in the CLR, since it has to contain 14* K/V pairs.
+            // Array of type 'Bucket[...]' from assembly 'SimdDictionary, ...' cannot be created because base value type is too large.
+            public const int InnerSize = 128;
+
+            public fixed int Values[InnerSize];
+
+            public BigStruct (int i) {
+                for (int j = 0; j < InnerSize; j++)
+                    Values[j] = i + j;
+            }
+
+            // This needs to be readonly, otherwise calling it on a 'ref readonly' clones the struct and crushes us
+            public readonly bool InputMatches (int i) {
+                if (Values[0] != i)
+                    return false;
+                int j = InnerSize - 1;
+                if (Values[j] != i + j)
+                    return false;
+                return true;
+            }
+        }
+
+        const int Size = 10240;
+
+        public Dictionary<int, BigStruct> BCL = new (Size);
+        public SimdDictionary<int, BigStruct> SIMD = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            for (int i = 0; i < Size; i++) {
+                var value = new BigStruct(i);
+                BCL.Add(i, value);
+                SIMD.Add(i, value);
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingSIMD () {
+            for (int i = 0; i < Size; i++) {
+                ref readonly var value = ref SIMD.FindValueOrNullRef(i);
+                if (Unsafe.IsNullRef(in value))
+                    throw new Exception("Key not found");
+                // This is extremely expensive unless InputMatches is a readonly method
+                if (!value.InputMatches(i))
+                    throw new Exception("Result mismatch");
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingBCL () {
+            for (int i = 0; i < Size; i++) {
+                if (!BCL.TryGetValue(i, out var result))
+                    throw new Exception("Key not found");
+                if (!result.InputMatches(i))
+                    throw new Exception("Result mismatch");
             }
         }
     }
