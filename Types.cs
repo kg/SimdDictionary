@@ -20,8 +20,10 @@ namespace SimdDictionary {
             CountSlot = 14,
             CascadeSlot = 15;
 
+        public delegate bool ForEachCallback (int i, in K key, in V value);
+
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct Pair {
+        internal struct Pair {
             public K Key;
             public V Value;
         }

@@ -216,5 +216,68 @@ namespace SimdDictionary {
                 _valueIndexLocal = BucketSizeI;
             }
         }
+        public ref struct RefEnumerator {
+            private int _bucketIndex, _valueIndexLocal;
+            private ref Bucket _currentBucket;
+            private ref Pair _currentPair;
+            private Span<Bucket> _buckets;
+
+            public ref readonly K CurrentKey {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get {
+                    return ref _currentPair.Key;
+                }
+            }
+
+            public ref readonly V CurrentValue {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get {
+                    return ref _currentPair.Value;
+                }
+            }
+
+            public KeyValuePair<K, V> Current {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get {
+                    ref var pair = ref _currentPair;
+                    return new KeyValuePair<K, V>(pair.Key, pair.Value);
+                }
+            }
+
+            public RefEnumerator (SimdDictionary<K, V> dictionary) {
+                _bucketIndex = -1;
+                _valueIndexLocal = BucketSizeI;
+                _buckets = dictionary._Buckets;
+                _currentPair = ref Unsafe.NullRef<Pair>();
+                _currentBucket = ref Unsafe.NullRef<Bucket>();
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool MoveNext () {
+                _valueIndexLocal++;
+
+                while (_bucketIndex < _buckets.Length) {                    
+                    var count = Unsafe.IsNullRef(in _currentBucket) ? 0 : _currentBucket.Count;
+                    if (_valueIndexLocal >= count) {
+                        _valueIndexLocal = 0;
+                        _bucketIndex++;
+                        if (_bucketIndex >= _buckets.Length)
+                            return false;
+                        _currentBucket = ref _buckets[_bucketIndex];
+                    }
+
+                    while (_valueIndexLocal < count) {
+                        var suffix = _currentBucket.GetSlot(_valueIndexLocal);
+                        if (suffix != 0) {
+                            _currentPair = ref _currentBucket.Pairs[_valueIndexLocal];
+                            return true;
+                        }
+                        _valueIndexLocal++;
+                    }
+                }
+
+                return false;
+            }
+        }
     }
 }

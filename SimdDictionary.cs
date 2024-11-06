@@ -521,12 +521,34 @@ namespace SimdDictionary {
             return callback.Result;
         }
 
+        internal struct ForEachImpl : IPairCallback {
+            private readonly ForEachCallback Callback;
+            private int Index;
+
+            public ForEachImpl (ForEachCallback callback) {
+                Callback = callback;
+                Index = 0;
+            }
+
+            public bool Pair (ref Pair pair) {
+                return Callback(Index++, in pair.Key, in pair.Value);
+            }
+        }
+
+        public void ForEach (ForEachCallback callback) {
+            var state = new ForEachImpl(callback);
+            EnumeratePairs(_Buckets, ref state);
+        }
+
         void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
             CopyToArray(array, arrayIndex);
         }
 
         public Enumerator GetEnumerator () =>
             new Enumerator(this);
+
+        public RefEnumerator GetRefEnumerator () =>
+            new RefEnumerator(this);
 
         IEnumerator<KeyValuePair<K, V>> IEnumerable<KeyValuePair<K, V>>.GetEnumerator () =>
             GetEnumerator();

@@ -401,4 +401,55 @@ namespace Benchmarks {
             }
         }
     }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class Enumeration {
+        const int Size = 10240;
+
+        public SimdDictionary<int, long> SIMD = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            for (int i = 0; i < Size; i++)
+                SIMD.Add(i, i);
+        }
+
+        [Benchmark]
+        public void RegularForeach () {
+            int i = 0;
+            foreach (var kvp in SIMD) {
+                if (kvp.Value != kvp.Key)
+                    throw new Exception("Invalid value");
+                i++;
+            }
+            if (i != Size)
+                throw new Exception("Wrong number of items");
+        }
+
+        [Benchmark]
+        public void CallbackForeach () {
+            int i = 0;
+            SIMD.ForEach((int _, in int k, in long v) => {
+                if (k != v)
+                    throw new Exception("Invalid value");
+                i++;
+                return true;
+            });
+            if (i != Size)
+                throw new Exception("Wrong number of items");
+        }
+
+        [Benchmark]
+        public void RefForeach () {
+            int i = 0;
+            var e = SIMD.GetRefEnumerator();
+            while (e.MoveNext()) {
+                if (e.CurrentValue != e.CurrentKey)
+                    throw new Exception("Invalid value");
+                i++;
+            }
+            if (i != Size)
+                throw new Exception("Wrong number of items");
+        }
+    }
 }
