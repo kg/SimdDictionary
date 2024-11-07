@@ -16,6 +16,10 @@ public static class DisasmHarness
         PresentKey = (typeof(K) == typeof(string)) ? (K)(object)"1" : (K)(object)1L;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool TryFindValue (D dict, int i, K missingKey, K presentKey) =>
+        !Unsafe.IsNullRef(in dict.FindValueOrNullRef((i % 2) == 0 ? missingKey : presentKey));
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryGetValue (D dict, int i, K missingKey, K presentKey) =>
         dict.TryGetValue((i % 2) == 0 ? missingKey : presentKey, out var result);
 

@@ -328,7 +328,7 @@ namespace Benchmarks {
         public unsafe struct BigStruct {
             // Note that if InnerSize is too big, Bucket will hit an internal limitation in the CLR, since it has to contain 14* K/V pairs.
             // Array of type 'Bucket[...]' from assembly 'SimdDictionary, ...' cannot be created because base value type is too large.
-            public const int InnerSize = 128;
+            public const int InnerSize = 256;
 
             public fixed int Values[InnerSize];
 

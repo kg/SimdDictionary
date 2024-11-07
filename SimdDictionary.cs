@@ -129,7 +129,7 @@ namespace SimdDictionary {
             }
         }
 
-        internal struct RehashCallback : IPairCallback {
+        internal readonly struct RehashCallback : IPairCallback {
             public readonly SimdDictionary<K, V> Self;
 
             public RehashCallback (SimdDictionary<K, V> self) {
@@ -204,6 +204,9 @@ namespace SimdDictionary {
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
+            // We eagerly create the search vector here before we need it, because in many cases it would get LICM'd here
+            //  anyway. On some architectures create's latency is very low but on others it isn't, so on average it is better
+            //  to put it outside of the loop.
             var searchVector = Vector128.Create(suffix);
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
             do {
@@ -438,7 +441,7 @@ namespace SimdDictionary {
         void ICollection<KeyValuePair<K, V>>.Add (KeyValuePair<K, V> item) =>
             Add(item.Key, item.Value);
 
-        internal struct ClearCallback : IBucketCallback {
+        internal readonly struct ClearCallback : IBucketCallback {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Bucket (ref Bucket bucket) {
                 int c = bucket.Count;
