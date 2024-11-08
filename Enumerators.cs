@@ -140,6 +140,10 @@ namespace SimdDictionary {
 
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>>, IDictionaryEnumerator {
             private int _bucketIndex, _valueIndexLocal;
+            // NOTE: Copying the bucket as we enter it means that concurrent modification during enumeration is completely safe;
+            //  the old contents of the bucket will be observed instead of a mix of modified and unmodified bucket items, and
+            //  removing or adding items during iteration of the bucket won't cause issues.
+            // You still shouldn't mutate the collection while enumerating it though!
             private Bucket _currentBucket;
             private Bucket[] _buckets;
 
@@ -218,6 +222,7 @@ namespace SimdDictionary {
         }
         public ref struct RefEnumerator {
             private int _bucketIndex, _valueIndexLocal;
+            // FIXME: Make a copy of the current bucket as we walk, so that modification during enumeration isn't hazardous?
             private ref Bucket _currentBucket;
             private ref Pair _currentPair;
             private Span<Bucket> _buckets;

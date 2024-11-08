@@ -408,6 +408,11 @@ namespace Benchmarks {
 
         public Dictionary<int, long> BCL = new (Size);
         public SimdDictionary<int, long> SIMD = new (Size);
+        public Func<int, long, long> AddOrUpdateCallback;
+
+        public Permutation () {
+            AddOrUpdateCallback = (k, v) => v + 1;
+        }
 
         [GlobalSetup]
         public void Setup () {
@@ -435,6 +440,12 @@ namespace Benchmarks {
                 v++;
                 return true;
             });
+        }
+
+        [Benchmark]
+        public void AddOrUpdateSIMD () {
+            for (int i = 0; i < Size; i++)
+                SIMD.AddOrUpdate(i, i, AddOrUpdateCallback);
         }
     }
 

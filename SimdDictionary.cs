@@ -585,6 +585,18 @@ namespace SimdDictionary {
             return ref pair.Value;
         }
 
+        public V AddOrUpdate (K key, V addValue, Func<K, V, V> updateValueFactory) {
+            // FIXME: Write a dedicated implementation that works in a single pass, based on TryInsert?
+            ref var pair = ref FindKey(key);
+            if (Unsafe.IsNullRef(ref pair)) {
+                if (TryInsert(key, addValue, InsertMode.EnsureUnique) != InsertResult.OkAddedNew)
+                    ThrowConcurrentModification();
+                return addValue;
+            } else {
+                return pair.Value = updateValueFactory(key, pair.Value);
+            }
+        }
+
         public V GetOrAdd (K key, Func<K, V> valueFactory) {
             // FIXME: Write a dedicated implementation that works in a single pass, based on TryInsert?
             ref var pair = ref FindKey(key);
