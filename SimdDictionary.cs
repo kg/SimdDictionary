@@ -534,7 +534,7 @@ namespace SimdDictionary {
             }
 
             public bool Pair (ref Pair pair) {
-                return Callback(Index++, in pair.Key, in pair.Value);
+                return Callback(Index++, in pair.Key, ref pair.Value);
             }
         }
 
@@ -583,6 +583,17 @@ namespace SimdDictionary {
             if (Unsafe.IsNullRef(ref pair))
                 return ref Unsafe.NullRef<V>();
             return ref pair.Value;
+        }
+
+        public V GetOrAdd (K key, Func<K, V> valueFactory) {
+            // FIXME: Write a dedicated implementation that works in a single pass, based on TryInsert?
+            ref var pair = ref FindKey(key);
+            if (Unsafe.IsNullRef(ref pair)) {
+                var value = valueFactory(key);
+                TryInsert(key, value, InsertMode.GetOrAdd);
+                return value;
+            } else
+                return pair.Value;
         }
 
         public object Clone () =>

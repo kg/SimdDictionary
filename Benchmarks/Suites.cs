@@ -403,6 +403,42 @@ namespace Benchmarks {
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class Permutation {
+        const int Size = 10240;
+
+        public Dictionary<int, long> BCL = new (Size);
+        public SimdDictionary<int, long> SIMD = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            for (int i = 0; i < Size; i++) {
+                BCL.Add(i, i);
+                SIMD.Add(i, i);
+            }
+        }
+
+        [Benchmark]
+        public void RegularModifyBCL () {
+            for (int i = 0; i < Size; i++)
+                BCL[i]++;
+        }
+
+        [Benchmark]
+        public void RegularModifySIMD () {
+            for (int i = 0; i < Size; i++)
+                SIMD[i]++;
+        }
+
+        [Benchmark]
+        public void ForeachModifySIMD () {
+            SIMD.ForEach((int _, in int k, ref long v) => {
+                v++;
+                return true;
+            });
+        }
+    }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     public class Enumeration {
         const int Size = 10240;
 
@@ -429,7 +465,7 @@ namespace Benchmarks {
         [Benchmark]
         public void CallbackForeach () {
             int i = 0;
-            SIMD.ForEach((int _, in int k, in long v) => {
+            SIMD.ForEach((int _, in int k, ref long v) => {
                 if (k != v)
                     throw new Exception("Invalid value");
                 i++;
@@ -450,6 +486,60 @@ namespace Benchmarks {
             }
             if (i != Size)
                 throw new Exception("Wrong number of items");
+        }
+    }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class GetOrAdd {
+        const int Size = 10240;
+
+        public Dictionary<int, long> BCL = new (Size);
+        public SimdDictionary<int, long> SIMD = new (Size);
+        public Func<int, long> ValueFactory;
+
+        public GetOrAdd () {
+            ValueFactory = (i) => i;
+        }
+
+        [GlobalSetup]
+        public void Setup () {
+        }
+
+        [Benchmark]
+        public void RegularBCL () {
+            BCL.Clear();
+            for (int i = 0; i < Size; i++) {
+                if (!BCL.TryGetValue(i, out var l)) {
+                    l = ValueFactory(i);
+                    BCL.Add(i, l);
+                }
+                if (l != i)
+                    throw new Exception();
+            }
+        }
+
+        [Benchmark]
+        public void RegularSIMD () {
+            SIMD.Clear();
+            for (int i = 0; i < Size; i++) {
+                if (!SIMD.TryGetValue(i, out var l)) {
+                    l = ValueFactory(i);
+                    SIMD.Add(i, l);
+                }
+                if (l != i)
+                    throw new Exception();
+            }
+        }
+
+        [Benchmark]
+        public void GetOrAddSIMD () {
+            var valueFactory = ValueFactory;
+            SIMD.Clear();
+            for (int i = 0; i < Size; i++) {
+                var l = SIMD.GetOrAdd(i, valueFactory);
+                if (l != i)
+                    throw new Exception();
+            }
         }
     }
 }

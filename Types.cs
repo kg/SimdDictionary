@@ -20,7 +20,7 @@ namespace SimdDictionary {
             CountSlot = 14,
             CascadeSlot = 15;
 
-        public delegate bool ForEachCallback (int i, in K key, in V value);
+        public delegate bool ForEachCallback (int i, in K key, ref V value);
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         internal struct Pair {
@@ -80,7 +80,9 @@ namespace SimdDictionary {
             OverwriteValue,
             // Don't scan for existing matches before inserting into the bucket. This is only
             //  safe to do when copying an existing dictionary or rehashing an existing dictionary
-            Rehashing
+            Rehashing,
+            // TODO: Alias to Rehashing for performance? Dangerous in the event there is concurrent modification
+            GetOrAdd = EnsureUnique
         }
 
         public enum InsertResult {
