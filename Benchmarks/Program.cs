@@ -68,6 +68,16 @@ namespace Benchmarks {
                     throw new Exception();
             }
 
+            // Validate that pre-sized dictionaries don't grow
+            var capTest = new UnorderedDictionary<TKey, TValue>(UnorderedDictionary<TKey, TValue>.BucketSizeI);
+            if (capTest.Capacity != UnorderedDictionary<TKey, TValue>.BucketSizeI)
+                throw new Exception("Pre-sized dict capacity is wrong");
+
+            for (int i = 0; i < capTest.Capacity; i++)
+                capTest.Add(i, i);
+            if (capTest.Capacity != UnorderedDictionary<TKey, TValue>.BucketSizeI)
+                throw new Exception("Pre-sized dict grew after filling");
+
             // Don't pre-allocate capacity, so that we check growth/rehashing
             var test = new UnorderedDictionary<TKey, TValue>(0);
 

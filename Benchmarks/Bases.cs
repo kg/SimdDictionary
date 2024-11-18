@@ -365,7 +365,8 @@ namespace Benchmarks {
         where T : IDictionary<TKey, TValue> {
 
         public int MinCapacity = 0, 
-            MaxCapacity = 8192,
+            MaxCapacity = 8419,
+            MaxSmallSize = 28,
             CapacityStep = 4;
 
         ConstructorInfo Ctor;
@@ -392,6 +393,23 @@ namespace Benchmarks {
                 var c = Math.Min(MaxCapacity, i);
                 sizeArray[0] = c;
                 var instance = (T)Ctor.Invoke(sizeArray);
+            }
+        }
+
+        [Benchmark]
+        public void FillSmallSizes () {
+            var pCapacity = typeof(T).GetProperty("Capacity")!;
+            object[] sizeArray = new object[1];
+            for (int i = 0; i <= MaxSmallSize; i += 1) {
+                sizeArray[0] = i;
+                var instance = (T)Ctor.Invoke(sizeArray);
+
+                var capacityBefore = pCapacity.GetValue(instance);
+                for (int j = 0; j < i; j++)
+                    instance.Add(j, j);
+                var capacityAfter = pCapacity.GetValue(instance);
+                if (!capacityAfter!.Equals(capacityBefore))
+                    throw new Exception("Capacity changed after filling!");
             }
         }
     }

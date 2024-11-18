@@ -268,12 +268,22 @@ namespace Benchmarks {
         }
 
         [Benchmark]
-        public void FindExistingSIMD () {
+        public void FindExistingSIMDValueRef () {
             for (int i = 0; i < Size; i++) {
                 ref readonly var value = ref SIMD.GetValueRefOrNullRef(i);
                 if (Unsafe.IsNullRef(in value))
                     throw new Exception("Key not found");
                 // This is extremely expensive unless InputMatches is a readonly method
+                if (!value.InputMatches(i))
+                    throw new Exception("Result mismatch");
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingSIMD () {
+            for (int i = 0; i < Size; i++) {
+                if (!SIMD.TryGetValue(i, out var value))
+                    throw new Exception("Key not found");
                 if (!value.InputMatches(i))
                     throw new Exception("Result mismatch");
             }
