@@ -21,40 +21,45 @@ namespace SimdDictionary {
         //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
         //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
         //  we're empty.
-        public static readonly SimdDictionary<K, V>.Bucket[] EmptyBuckets = new SimdDictionary<K, V>.Bucket[1];
+        public static readonly UnorderedDictionary<K, V>.Bucket[] EmptyBuckets = new UnorderedDictionary<K, V>.Bucket[1];
 #pragma warning restore CA1825
     }
 
-    public partial class SimdDictionary<K, V> : 
+    public partial class UnorderedDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
         ICollection<KeyValuePair<K, V>>, ICloneable
         where K : notnull
     {
-        private ulong _fastModMultiplier;
+        public readonly IEqualityComparer<K>? Comparer;
 
-        // TODO: Make these reference types initialized on demand / add cache fields for the accessors that box them.
+        // In SCG.Dictionary, Keys and Values are on-demand-allocated classes. Here, they are on-demand-created structs.
         public KeyCollection Keys => new KeyCollection(this);
         public ValueCollection Values => new ValueCollection(this);
-        public readonly IEqualityComparer<K>? Comparer;
+        // These optimize for the scenario where someone uses IDictionary.Keys or IDictionary<K, V>.Keys. Normally this
+        //  would have to box the KeyCollection/ValueCollection structs on demand, so we cache the boxed version of them
+        //  in these fields to get rid of the per-use allocation. Most application scenarios will never allocate these.
+        private ICollection<K>? _BoxedKeys;
+        private ICollection<V>? _BoxedValues;
         // It's important for an empty dictionary to have both count and growatcount be 0
         private int _Count = 0, 
             _GrowAtCount = 0;
+        private ulong _fastModMultiplier;
 
         private Bucket[] _Buckets = SimdDictionaryHelpers<K, V>.EmptyBuckets;
 
-        public SimdDictionary () 
+        public UnorderedDictionary () 
             : this (InitialCapacity, null) {
         }
 
-        public SimdDictionary (int capacity)
+        public UnorderedDictionary (int capacity)
             : this (capacity, null) {
         }
 
-        public SimdDictionary (IEqualityComparer<K>? comparer)
+        public UnorderedDictionary (IEqualityComparer<K>? comparer)
             : this (InitialCapacity, comparer) {
         }
 
-        public SimdDictionary (int capacity, IEqualityComparer<K>? comparer) {
+        public UnorderedDictionary (int capacity, IEqualityComparer<K>? comparer) {
             if (typeof(K).IsValueType)
                 Comparer = comparer;
             // HACK: DefaultEqualityComparer<K> for string is really bad
@@ -65,7 +70,7 @@ namespace SimdDictionary {
             EnsureCapacity(capacity);
         }
 
-        public SimdDictionary (SimdDictionary<K, V> source) {
+        public UnorderedDictionary (UnorderedDictionary<K, V> source) {
             Comparer = source.Comparer;
             _Count = source._Count;
             _GrowAtCount = source._GrowAtCount;
@@ -130,9 +135,9 @@ namespace SimdDictionary {
         }
 
         internal readonly struct RehashCallback : IPairCallback {
-            public readonly SimdDictionary<K, V> Self;
+            public readonly UnorderedDictionary<K, V> Self;
 
-            public RehashCallback (SimdDictionary<K, V> self) {
+            public RehashCallback (UnorderedDictionary<K, V> self) {
                 Self = self;
             }
 
@@ -382,8 +387,8 @@ namespace SimdDictionary {
             }
         }
 
-        ICollection<K> IDictionary<K, V>.Keys => Keys;
-        ICollection<V> IDictionary<K, V>.Values => Values;
+        ICollection<K> IDictionary<K, V>.Keys => (_BoxedKeys ??= Keys);
+        ICollection<V> IDictionary<K, V>.Values => (_BoxedValues ??= Values);
 
         public int Count => _Count;
         public int Capacity => _GrowAtCount;
@@ -394,17 +399,17 @@ namespace SimdDictionary {
 
         bool IDictionary.IsReadOnly => false;
 
-        ICollection IDictionary.Keys => Keys;
+        ICollection IDictionary.Keys => (ICollection)(_BoxedKeys ??= Keys);
 
-        ICollection IDictionary.Values => Values;
+        ICollection IDictionary.Values => (ICollection)(_BoxedValues ??= Values);
 
         bool ICollection.IsSynchronized => false;
 
         object ICollection.SyncRoot => this;
 
-        IEnumerable<K> IReadOnlyDictionary<K, V>.Keys => Keys;
+        IEnumerable<K> IReadOnlyDictionary<K, V>.Keys => (_BoxedKeys ??= Keys);
 
-        IEnumerable<V> IReadOnlyDictionary<K, V>.Values => Values;
+        IEnumerable<V> IReadOnlyDictionary<K, V>.Values => (_BoxedValues ??= Values);
 
         object? IDictionary.this[object key] {
             get => this[(K)key];
@@ -609,7 +614,7 @@ namespace SimdDictionary {
         }
 
         public object Clone () =>
-            new SimdDictionary<K, V>(this);
+            new UnorderedDictionary<K, V>(this);
 
         private struct CopyToKvp : IPairCallback {
             public readonly KeyValuePair<K, V>[] Array;

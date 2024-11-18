@@ -4,17 +4,17 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace SimdDictionary {
-    public partial class SimdDictionary<K, V> {
+    public partial class UnorderedDictionary<K, V> {
         public struct KeyCollection : ICollection<K>, ICollection {
-            public readonly SimdDictionary<K, V> Dictionary;
+            public readonly UnorderedDictionary<K, V> Dictionary;
 
             public struct Enumerator : IEnumerator<K> {
-                internal SimdDictionary<K, V>.Enumerator Inner;
+                internal UnorderedDictionary<K, V>.Enumerator Inner;
 
                 public K Current => Inner.CurrentKey;
                 object? IEnumerator.Current => Inner.CurrentKey;
 
-                internal Enumerator (SimdDictionary<K, V> dictionary) {
+                internal Enumerator (UnorderedDictionary<K, V> dictionary) {
                     Inner = dictionary.GetEnumerator();
                 }
 
@@ -28,7 +28,7 @@ namespace SimdDictionary {
                     Inner.Reset();
             }
 
-            internal KeyCollection (SimdDictionary<K, V> dictionary) {
+            internal KeyCollection (UnorderedDictionary<K, V> dictionary) {
                 Dictionary = dictionary;
             }
 
@@ -71,15 +71,15 @@ namespace SimdDictionary {
         }
 
         public struct ValueCollection : ICollection<V>, ICollection {
-            public readonly SimdDictionary<K, V> Dictionary;
+            public readonly UnorderedDictionary<K, V> Dictionary;
 
             public struct Enumerator : IEnumerator<V> {
-                internal SimdDictionary<K, V>.Enumerator Inner;
+                internal UnorderedDictionary<K, V>.Enumerator Inner;
 
                 public V Current => Inner.CurrentValue;
                 object? IEnumerator.Current => Inner.CurrentValue;
 
-                internal Enumerator (SimdDictionary<K, V> dictionary) {
+                internal Enumerator (UnorderedDictionary<K, V> dictionary) {
                     Inner = dictionary.GetEnumerator();
                 }
 
@@ -93,7 +93,7 @@ namespace SimdDictionary {
                     Inner.Reset();
             }
 
-            internal ValueCollection (SimdDictionary<K, V> dictionary) {
+            internal ValueCollection (UnorderedDictionary<K, V> dictionary) {
                 Dictionary = dictionary;
             }
 
@@ -181,7 +181,7 @@ namespace SimdDictionary {
 
             object? IDictionaryEnumerator.Value => CurrentValue;
 
-            public Enumerator (SimdDictionary<K, V> dictionary) {
+            public Enumerator (UnorderedDictionary<K, V> dictionary) {
                 _bucketIndex = -1;
                 _valueIndexLocal = BucketSizeI;
                 _buckets = dictionary._Buckets;
@@ -249,7 +249,7 @@ namespace SimdDictionary {
                 }
             }
 
-            public RefEnumerator (SimdDictionary<K, V> dictionary) {
+            public RefEnumerator (UnorderedDictionary<K, V> dictionary) {
                 _bucketIndex = -1;
                 _valueIndexLocal = BucketSizeI;
                 _buckets = dictionary._Buckets;

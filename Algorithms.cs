@@ -14,7 +14,7 @@ using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    public partial class SimdDictionary<K, V> {
+    public partial class UnorderedDictionary<K, V> {
         // Extracting all this logic into each caller improves codegen slightly + reduces code size slightly, but the
         //  duplication reduces maintainability, so I'm pretty happy doing this instead.
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
@@ -26,7 +26,7 @@ namespace SimdDictionary {
 
             // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public LoopingBucketEnumerator (SimdDictionary<K, V> self, uint hashCode) {
+            public LoopingBucketEnumerator (UnorderedDictionary<K, V> self, uint hashCode) {
                 var buckets = new Span<Bucket>(self._Buckets);
                 var initialBucketIndex = self.BucketIndexForHashCode(hashCode, buckets);
                 Debug.Assert(buckets.Length > 0);
@@ -44,7 +44,7 @@ namespace SimdDictionary {
 
             // HACK: Outlining this method doesn't reduce code size, so just inline it.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public ref Bucket GetFirstBucket (SimdDictionary<K, V> self) {
+            public ref Bucket GetFirstBucket (UnorderedDictionary<K, V> self) {
                 // In the common case (given an optimal hash) we won't actually need the address of the first bucket,
                 //  so we no longer store it in the enumerator. Instead, we compute it on-demand by re-loading the field.
                 // This is fairly cheap in practice since our this-reference has to stay around anyway.
@@ -58,7 +58,7 @@ namespace SimdDictionary {
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Advance (SimdDictionary<K, V> self) {
+            public bool Advance (UnorderedDictionary<K, V> self) {
                 if (Unsafe.AreSame(ref bucket, ref lastBucket))
                     // Rare case: Wrap around from last bucket to first bucket.
                     bucket = ref GetFirstBucket(self);

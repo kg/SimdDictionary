@@ -48,7 +48,7 @@ namespace Benchmarks {
             List<TValue> values = new (c);
 
             List<TailCollider> tcs = new();
-            var tcTest = new SimdDictionary<TailCollider, int>();
+            var tcTest = new UnorderedDictionary<TailCollider, int>();
             for (int i = 0; i < f; i++) {
                 var tc = new TailCollider();
                 tcs.Add(tc);
@@ -69,7 +69,7 @@ namespace Benchmarks {
             }
 
             // Don't pre-allocate capacity, so that we check growth/rehashing
-            var test = new SimdDictionary<TKey, TValue>(0);
+            var test = new UnorderedDictionary<TKey, TValue>(0);
 
             for (int i = 0; i < c; i++) {
                 var key = NextKey(rng);
@@ -110,7 +110,7 @@ namespace Benchmarks {
             var keyList = test.Keys.ToArray();
             var valueList = test.Values.ToArray();
 
-            var copy = new SimdDictionary<TKey, TValue>(test);
+            var copy = new UnorderedDictionary<TKey, TValue>(test);
             for (int j = 0; j < e; j++)
             {
                 for (int i = 0; i < c; i++)
