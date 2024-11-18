@@ -6,19 +6,14 @@ using System.Runtime.Intrinsics;
 
 namespace SimdDictionary
 {
-    public interface IAlternateComparer<K, TAlternateKey> {
-        int GetHashCode (TAlternateKey other);
-        bool Equals (K key, TAlternateKey other);
-    }
-
     public partial class SimdDictionary<K, V> {
         public readonly struct AlternateLookup<TAlternateKey>
-            where TAlternateKey : notnull { // fixme: allows ref struct
+            where TAlternateKey : notnull, allows ref struct {
 
             public readonly SimdDictionary<K, V> Dictionary;
-            public readonly IAlternateComparer<K, TAlternateKey> Comparer;
+            public readonly IAlternateEqualityComparer<TAlternateKey, K> Comparer;
 
-            public AlternateLookup (SimdDictionary<K, V> dictionary, IAlternateComparer<K, TAlternateKey> comparer) {
+            public AlternateLookup (SimdDictionary<K, V> dictionary, IAlternateEqualityComparer<TAlternateKey, K> comparer) {
                 if (dictionary == null)
                     throw new ArgumentNullException(nameof(dictionary));
                 if (comparer == null)
@@ -31,7 +26,7 @@ namespace SimdDictionary
                 get {
                     ref var pair = ref FindKey(key);
                     if (Unsafe.IsNullRef(ref pair))
-                        throw new KeyNotFoundException($"Key {key} not found");
+                        throw new KeyNotFoundException();
                     return pair.Value;
                 }
             }
@@ -75,7 +70,7 @@ namespace SimdDictionary
             internal static ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket,
-                int indexInBucket, int bucketCount, IAlternateComparer<K, TAlternateKey> comparer, 
+                int indexInBucket, int bucketCount, IAlternateEqualityComparer<TAlternateKey, K> comparer, 
                 TAlternateKey needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);
@@ -86,7 +81,7 @@ namespace SimdDictionary
                 for (; indexInBucket < bucketCount; indexInBucket++, pair = ref Unsafe.Add(ref pair, 1)) {
                     if (Unsafe.IsNullRef(ref pair))
                         pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
-                    if (comparer!.Equals(pair.Key, needle)) {
+                    if (comparer!.Equals(needle, pair.Key)) {
                         matchIndexInBucket = indexInBucket;
                         return ref pair;
                     }

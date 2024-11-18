@@ -578,7 +578,7 @@ namespace SimdDictionary {
 
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public ref readonly V FindValueOrNullRef (K key) {
+        public ref readonly V GetValueRefOrNullRef (K key) {
             ref var pair = ref FindKey(key);
             if (Unsafe.IsNullRef(ref pair))
                 return ref Unsafe.NullRef<V>();
@@ -711,6 +711,18 @@ namespace SimdDictionary {
                 CopyTo(oa, 0);
             else
                 throw new ArgumentException("Unsupported destination array type", nameof(array));
+        }
+
+        public bool TryGetAlternateLookup<TAlternateKey> (out AlternateLookup<TAlternateKey> result)
+            where TAlternateKey : notnull, allows ref struct 
+        {
+            if (Comparer is IAlternateEqualityComparer<TAlternateKey, K> aec) {
+                result = new AlternateLookup<TAlternateKey>(this, aec);
+                return true;
+            }
+
+            result = default;
+            return false;
         }
 
         [DoesNotReturn]

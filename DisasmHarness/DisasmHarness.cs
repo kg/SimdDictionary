@@ -17,7 +17,7 @@ public static class DisasmHarness
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryFindValue (D dict, int i, K missingKey, K presentKey) =>
-        !Unsafe.IsNullRef(in dict.FindValueOrNullRef((i % 2) == 0 ? missingKey : presentKey));
+        !Unsafe.IsNullRef(in dict.GetValueRefOrNullRef((i % 2) == 0 ? missingKey : presentKey));
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryGetValue (D dict, int i, K missingKey, K presentKey) =>

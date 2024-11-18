@@ -113,101 +113,6 @@ namespace Benchmarks {
     public class SimdMemoryUsage : MemoryUsage<SimdDictionary<TKey, TValue>> {
     }
 
-    // FIXME
-    [MemoryDiagnoser()]
-    [DisassemblyDiagnoser()]
-    public class SimdAlternateLookup {
-        public sealed class ArrayComparer : IEqualityComparer<char[]> {
-            public bool Equals (char[]? x, char[]? y) =>
-                x.SequenceEqual(y);
-
-            public int GetHashCode ([DisallowNull] char[] obj) =>
-                obj.Length;
-        }
-
-        public sealed class Comparer : IAlternateComparer<string, char[]> {
-            public bool Equals (string key, char[] other) {
-                if (key.Length != other.Length)
-                    return false;
-                for (int i = 0; i < other.Length; i++)
-                    if (key[i] != other[i])
-                        return false;
-                return true;
-            }
-
-            public int GetHashCode (char[] other) {
-                // FIXME
-                return (new string(other)).GetHashCode();
-            }
-        }
-
-        public const int Size = 4096;
-        SimdDictionary<string, Int64> Dict = new (Size);
-        SimdDictionary<string, Int64>.AlternateLookup<char[]> Lookup;
-        Random RNG = new Random(1234);
-        List<char[]> Keys = new(Size), UnusedKeys = new(Size);
-        List<Int64> Values = new (Size);
-
-        public SimdAlternateLookup() {
-            var ac = new ArrayComparer();
-
-            for (int i = 0; i < Size; i++) {
-                var key = NextKey();
-                while (Keys.Contains(key, ac))
-                    key = NextKey();
-                var value = RNG.NextInt64();
-                Keys.Add(key);
-                Values.Add(value);
-                Dict.Add(new string(key), value);
-            }
-
-            for (int i = 0; i < Size; i++) {
-                var key = NextKey();
-                while (Keys.Contains(key, ac) || UnusedKeys.Contains(key, ac))
-                    key = NextKey();
-                UnusedKeys.Add(key);
-            }
-
-            // FIXME: Comparer
-            Lookup = new (Dict, new Comparer());
-        }
-
-        private char[] NextKey () {
-            var l = RNG.Next(2, 8);
-            var result = new char[l];
-            for (int i = 0; i < l; i++)
-                result[i] = (char)RNG.Next(32, 127);
-            return result;
-        }
-
-        [Benchmark]
-        public void Accessor () {
-            for (int i = 0; i < Size; i++) {
-                var value = Lookup[Keys[i]];
-                if (value != Values[i])
-                    throw new Exception();
-            }
-        }
-
-        [Benchmark]
-        public void TryGetValueExisting () {
-            for (int i = 0; i < Size; i++) {
-                if (!Lookup.TryGetValue(Keys[i], out var value))
-                    throw new Exception();
-                if (value != Values[i])
-                    throw new Exception();
-            }
-        }
-
-        [Benchmark]
-        public void TryGetValueMissing () {
-            for (int i = 0; i < Size; i++) {
-                if (Lookup.TryGetValue(UnusedKeys[i], out _))
-                    throw new Exception();
-            }
-        }
-    }
-
     public class ClearingWithRefs {
         const int Size = 40960;
 
@@ -365,7 +270,7 @@ namespace Benchmarks {
         [Benchmark]
         public void FindExistingSIMD () {
             for (int i = 0; i < Size; i++) {
-                ref readonly var value = ref SIMD.FindValueOrNullRef(i);
+                ref readonly var value = ref SIMD.GetValueRefOrNullRef(i);
                 if (Unsafe.IsNullRef(in value))
                     throw new Exception("Key not found");
                 // This is extremely expensive unless InputMatches is a readonly method
@@ -387,7 +292,7 @@ namespace Benchmarks {
         [Benchmark]
         public void FindMissingSIMD () {
             for (int i = 1; i < Size; i++) {
-                ref readonly var value = ref SIMD.FindValueOrNullRef(-i);
+                ref readonly var value = ref SIMD.GetValueRefOrNullRef(-i);
                 if (!Unsafe.IsNullRef(in value))
                     throw new Exception("Key found");
             }
@@ -550,6 +455,79 @@ namespace Benchmarks {
                 var l = SIMD.GetOrAdd(i, valueFactory);
                 if (l != i)
                     throw new Exception();
+            }
+        }
+    }
+
+    [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
+    public class StringAlternateComparer {
+        public sealed class OpaqueComparer : IEqualityComparer<string>, IAlternateEqualityComparer<ReadOnlySpan<char>, string> {
+            public readonly StringComparer ActualComparer = StringComparer.Ordinal;
+            public readonly IAlternateEqualityComparer<ReadOnlySpan<char>, string> ActualAlternateComparer =
+                (IAlternateEqualityComparer<ReadOnlySpan<char>, string>)StringComparer.Ordinal;
+
+            public string Create (ReadOnlySpan<char> alternate) =>
+                ActualAlternateComparer.Create(alternate);
+
+            public bool Equals (string? x, string? y) {
+                return ActualComparer.Equals(x, y);
+            }
+
+            public bool Equals (ReadOnlySpan<char> alternate, string other) =>
+                ActualAlternateComparer.Equals(alternate, other);
+
+            public int GetHashCode ([DisallowNull] string obj) {
+                return ActualComparer.GetHashCode(obj);
+            }
+
+            public int GetHashCode (ReadOnlySpan<char> alternate) =>
+                ActualAlternateComparer.GetHashCode(alternate);
+        }
+
+        const int Size = 40960;
+
+        public Dictionary<string, long> BCL = new (Size, new OpaqueComparer());
+        public Dictionary<string, long>.AlternateLookup<ReadOnlySpan<char>> BCLLookup;
+        public SimdDictionary<string, long> SIMD = new (Size, new OpaqueComparer());
+        public SimdDictionary<string, long>.AlternateLookup<ReadOnlySpan<char>> SIMDLookup;
+        public HashSet<string> Strings = new (Size);
+
+        [GlobalSetup]
+        public void Setup () {
+            var rng = new Random(1);
+            for (int i = 0; i < Size; i++) {
+                var s = NextKey(rng);
+                while (Strings.Contains(s))
+                    s = NextKey(rng);
+                Strings.Add(s);
+                BCL.Add(s, i);
+                SIMD.Add(s, i);
+            }
+            BCL.TryGetAlternateLookup(out BCLLookup);
+            SIMD.TryGetAlternateLookup(out SIMDLookup);
+        }
+
+        private string NextKey (Random rng) {
+            var l = rng.Next(2, 10);
+            var result = new char[l];
+            for (int i = 0; i < l; i++)
+                result[i] = (char)rng.Next(32, 127);
+            return new string(result);
+        }
+
+        [Benchmark]
+        public void FindExistingSIMD () {
+            foreach (var s in Strings) {
+                if (!SIMDLookup.TryGetValue(s, out var value))
+                    Environment.FailFast("Failed");
+            }
+        }
+
+        [Benchmark]
+        public void FindExistingBCL () {
+            foreach (var s in Strings) {
+                if (!BCLLookup.TryGetValue(s, out var value))
+                    Environment.FailFast("Failed");
             }
         }
     }
