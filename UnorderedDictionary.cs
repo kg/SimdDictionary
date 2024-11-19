@@ -42,7 +42,7 @@ namespace SimdDictionary {
         private ICollection<V>? _BoxedValues;
         // It's important for an empty dictionary to have both count and growatcount be 0
         private int _Count = 0, 
-            _GrowAtCount = 0;
+            _Capacity = 0;
         private ulong _fastModMultiplier;
 
         private Bucket[] _Buckets = SimdDictionaryHelpers<K, V>.EmptyBuckets;
@@ -73,7 +73,7 @@ namespace SimdDictionary {
         public UnorderedDictionary (UnorderedDictionary<K, V> source) {
             Comparer = source.Comparer;
             _Count = source._Count;
-            _GrowAtCount = source._GrowAtCount;
+            _Capacity = source._Capacity;
             _fastModMultiplier = source._fastModMultiplier;
             if (source._Buckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
@@ -116,7 +116,7 @@ namespace SimdDictionary {
             var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
             checked {
-                _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
+                _Capacity = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
@@ -260,7 +260,7 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : struct, IKeySearcher 
         {
-            var needToGrow = (_Count >= _GrowAtCount);
+            var needToGrow = (_Count >= _Capacity);
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
@@ -379,7 +379,7 @@ namespace SimdDictionary {
                         _Count++;
                         return;
                     case InsertResult.NeedToGrow:
-                        Resize(_GrowAtCount * 2);
+                        EnsureCapacity(_Count + 1);
                         goto retry;
                     case InsertResult.CorruptedInternalState:
                         throw new Exception("Corrupted internal state");
@@ -391,7 +391,7 @@ namespace SimdDictionary {
         ICollection<V> IDictionary<K, V>.Values => (_BoxedValues ??= Values);
 
         public int Count => _Count;
-        public int Capacity => _GrowAtCount;
+        public int Capacity => _Capacity;
 
         bool ICollection<KeyValuePair<K, V>>.IsReadOnly => false;
 
@@ -434,7 +434,7 @@ namespace SimdDictionary {
                     _Count++;
                     return true;
                 case InsertResult.NeedToGrow:
-                    Resize(_GrowAtCount * 2);
+                    EnsureCapacity(_Count + 1);
                     goto retry;
                 case InsertResult.CorruptedInternalState:
                     throw new Exception("Corrupted internal state");

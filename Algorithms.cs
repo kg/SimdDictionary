@@ -153,13 +153,63 @@ namespace SimdDictionary {
 #else
             {
 #endif
-                var suffix = searchVector[0];
-                var haystack = (byte*)Unsafe.AsPointer(ref bucket);
-                // FIXME: Hand-unrolling into a chain of cmovs like in dn_simdhash doesn't work.
-                for (int i = 0; i < bucketCount; i++) {
-                    if (haystack[i] == suffix)
-                        return i;
+                if (false) {
+                    // Hand-unrolled scan of multiple bytes at a time. If a bucket contains 9 or more items, we will erroneously
+                    //  check lanes 15 and 16 (which contain the count and cascade count), but finding a false match there is harmless
+                    // We could do this 4 bytes at a time instead, but that isn't actually faster
+                    // This produces larger code than a chain of ifs.
+                    var wideHaystack = (UInt64*)Unsafe.AsPointer(ref bucket);
+                    for (int i = 0; i < bucketCount; i += 8, wideHaystack += 1) {
+                        // Doing a xor this way basically performs a vectorized compare of all the lanes, and we can test the result with
+                        //  a == 0 check on the low 8 bits, which is a single 'test rNNb' instruction on x86/x64
+                        var matchMask = *wideHaystack ^ searchVector.AsUInt64()[0];
+                        if (Step(ref matchMask))
+                            return i;
+                        if (Step(ref matchMask))
+                            return i + 1;
+                        if (Step(ref matchMask))
+                            return i + 2;
+                        if (Step(ref matchMask))
+                            return i + 3;
+                        if (Step(ref matchMask))
+                            return i + 4;
+                        if (Step(ref matchMask))
+                            return i + 5;
+                        if (Step(ref matchMask))
+                            return i + 6;
+                        if (Step(ref matchMask))
+                            return i + 7;
+                    }
+                } else if (true) {
+                    // Hand-unrolling the search into four comparisons per loop iteration is a significant performance improvement
+                    //  for a moderate code size penalty (733b -> 826b; 399usec -> 321usec, vs BCL's 421b and 270usec)
+                    // If a bucket contains 13 or more items we will erroneously check lanes 15/16 but this is harmless.
+                    var haystack = (byte*)Unsafe.AsPointer(ref bucket);
+                    for (int i = 0; i < bucketCount; i += 4, haystack += 4) {
+                        if (haystack[0] == searchVector[0])
+                            return i;
+                        if (haystack[1] == searchVector[0])
+                            return i + 1;
+                        if (haystack[2] == searchVector[0])
+                            return i + 2;
+                        if (haystack[3] == searchVector[0])
+                            return i + 3;
+                    }
+                } else {
+                    var haystack = (byte*)Unsafe.AsPointer(ref bucket);
+                    for (int i = 0; i < bucketCount; i++, haystack++)
+                        if (*haystack == searchVector[0])
+                            return i;
                 }
+                
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                static bool Step (ref UInt64 matchMask) {
+                    if ((matchMask & 0xFF) == 0)
+                        return true;
+                    matchMask >>= 8;
+                    return false;
+                }
+
                 return 32;
             }
         }
