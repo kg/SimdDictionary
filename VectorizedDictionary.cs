@@ -593,28 +593,38 @@ namespace SimdDictionary {
         }
 
         public V AddOrUpdate (K key, V addValue, Func<K, V, V> updateValueFactory) {
+retry:
             ref var pair = ref TryInsert(key, addValue, InsertMode.EnsureUnique, out var result);
-            if (result == InsertResult.KeyAlreadyPresent) {
-                return pair.Value = updateValueFactory(key, pair.Value);
-            } else if (result != InsertResult.OkAddedNew) {
-                ThrowConcurrentModification();
-                return default!;
-            } else {
-                return addValue;
+            switch (result) {
+                case InsertResult.NeedToGrow:
+                    EnsureCapacity(Count + 1);
+                    goto retry;
+                case InsertResult.KeyAlreadyPresent:
+                    return pair.Value = updateValueFactory(key, pair.Value);
+                case InsertResult.OkAddedNew:
+                    return addValue;
+                default:
+                    ThrowConcurrentModification();
+                    return default!;
             }
         }
 
         public V GetOrAdd (K key, Func<K, V> valueFactory) {
             // We insert a placeholder if the key is not already present, then overwrite the placeholder.
             // This is faster than doing two passes.
+retry:
             ref var pair = ref TryInsert(key, default!, InsertMode.EnsureUnique, out var result);
-            if (result == InsertResult.OkAddedNew) {
-                return pair.Value = valueFactory(key);
-            } else if (result != InsertResult.KeyAlreadyPresent) {
-                ThrowConcurrentModification();
-                return default!;
-            } else {
-                return pair.Value;
+            switch (result) {
+                case InsertResult.NeedToGrow:
+                    EnsureCapacity(Count + 1);
+                    goto retry;
+                case InsertResult.KeyAlreadyPresent:
+                    return pair.Value;
+                case InsertResult.OkAddedNew:
+                    return pair.Value = valueFactory(key);
+                default:
+                    ThrowConcurrentModification();
+                    return default!;
             }
         }
 
