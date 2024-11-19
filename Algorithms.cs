@@ -132,10 +132,6 @@ namespace SimdDictionary {
         internal static unsafe int FindSuffixInBucket (ref Bucket bucket, Vector128<byte> searchVector, int bucketCount) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
-                // FIXME: It would be nice to precompute the search vector outside of the loop, to hide the latency of vpbroadcastb.
-                // Right now if we do that, ryujit places the search vector in xmm6 which forces stack spills, and that's worse.
-                // So we have to compute it on-demand here. On modern x86-64 chips the latency of vpbroadcastb is 1, at least.
-                // FIXME: For some key types RyuJIT hoists the Vector128.Create out of the loop for us and causes a stack spill anyway :(
                 return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket.Suffixes)));
             } else if (AdvSimd.Arm64.IsSupported) {
                 // Completely untested
