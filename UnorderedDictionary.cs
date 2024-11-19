@@ -40,8 +40,9 @@ namespace SimdDictionary {
         //  in these fields to get rid of the per-use allocation. Most application scenarios will never allocate these.
         private ICollection<K>? _BoxedKeys;
         private ICollection<V>? _BoxedValues;
-        // Tracking only the # of empty slots makes the Count accessor more expensive, but almost everything else much cheaper
-        private int _EmptySlots = 0;
+        // It's important for an empty dictionary to have both count and growatcount be 0
+        private int _Count = 0, 
+            _GrowAtCount = 0;
         private ulong _fastModMultiplier;
 
         private Bucket[] _Buckets = SimdDictionaryHelpers<K, V>.EmptyBuckets;
@@ -71,7 +72,8 @@ namespace SimdDictionary {
 
         public UnorderedDictionary (UnorderedDictionary<K, V> source) {
             Comparer = source.Comparer;
-            _EmptySlots = source._EmptySlots;
+            _Count = source._Count;
+            _GrowAtCount = source._GrowAtCount;
             _fastModMultiplier = source._fastModMultiplier;
             if (source._Buckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
@@ -101,6 +103,7 @@ namespace SimdDictionary {
             ulong fastModMultiplier;
 
             checked {
+                capacity = (int)((long)capacity * OversizePercentage / 100);
                 if (capacity < 1)
                     capacity = 1;
 
@@ -112,7 +115,9 @@ namespace SimdDictionary {
 
             var actualCapacity = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
-            var oldCount = Count;
+            checked {
+                _GrowAtCount = (int)(((long)actualCapacity) * 100 / OversizePercentage);
+            }
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
@@ -120,11 +125,10 @@ namespace SimdDictionary {
             // HACK: Ensure we store a new larger bucket array before storing the fastModMultiplier for the larger size.
             // This ensures that concurrent modification will not produce a bucket index that is too big.
             Thread.MemoryBarrier();
-            _EmptySlots = actualCapacity - oldCount;
             _fastModMultiplier = fastModMultiplier;
 
             // FIXME: In-place rehashing
-            if (oldBuckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) {
+            if ((oldBuckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) && (_Count > 0)) {
                 var c = new RehashCallback(this);
                 EnumeratePairs(oldBuckets, ref c);
             }
@@ -256,7 +260,7 @@ namespace SimdDictionary {
         internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
             where TKeySearcher : struct, IKeySearcher 
         {
-            var needToGrow = _EmptySlots <= 0;
+            var needToGrow = (_Count >= _GrowAtCount);
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
@@ -343,7 +347,7 @@ namespace SimdDictionary {
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref pair)) {
-                    _EmptySlots++;
+                    _Count--;
                     RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount, ref pair);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
                     AdjustCascadeCounts(enumerator, false);
@@ -372,10 +376,10 @@ namespace SimdDictionary {
                 var insertResult = TryInsert(key, value, InsertMode.OverwriteValue);
                 switch (insertResult) {
                     case InsertResult.OkAddedNew:
-                        _EmptySlots--;
+                        _Count++;
                         return;
                     case InsertResult.NeedToGrow:
-                        EnsureCapacity(Capacity + 1);
+                        Resize(_GrowAtCount * 2);
                         goto retry;
                     case InsertResult.CorruptedInternalState:
                         throw new Exception("Corrupted internal state");
@@ -386,10 +390,8 @@ namespace SimdDictionary {
         ICollection<K> IDictionary<K, V>.Keys => (_BoxedKeys ??= Keys);
         ICollection<V> IDictionary<K, V>.Values => (_BoxedValues ??= Values);
 
-        public int Count => Capacity - _EmptySlots;
-        public int Capacity => (_Buckets == SimdDictionaryHelpers<K, V>.EmptyBuckets) 
-            ? 0 
-            : _Buckets.Length * BucketSizeI;
+        public int Count => _Count;
+        public int Capacity => _GrowAtCount;
 
         bool ICollection<KeyValuePair<K, V>>.IsReadOnly => false;
 
@@ -429,10 +431,10 @@ namespace SimdDictionary {
             var insertResult = TryInsert(key, value, InsertMode.EnsureUnique);
             switch (insertResult) {
                 case InsertResult.OkAddedNew:
-                    _EmptySlots--;
+                    _Count++;
                     return true;
                 case InsertResult.NeedToGrow:
-                    EnsureCapacity(Capacity + 1);
+                    Resize(_GrowAtCount * 2);
                     goto retry;
                 case InsertResult.CorruptedInternalState:
                     throw new Exception("Corrupted internal state");
@@ -482,10 +484,10 @@ namespace SimdDictionary {
         // NOTE: In benchmarks this looks much slower than SCG clear, but that's because our backing array at 4096 is
         //  much bigger than SCG's, so we're just measuring how much slower Array.Clear is on a bigger array
         public void Clear () {
-            if (Count == 0)
+            if (_Count == 0)
                 return;
 
-            _EmptySlots = Capacity;
+            _Count = 0;
             // FIXME: Only do this if _Count is below say 0.5x?
             var c = new ClearCallback();
             EnumerateBuckets(_Buckets, ref c);
@@ -519,7 +521,7 @@ namespace SimdDictionary {
         }
 
         public bool ContainsValue (V value) {
-            if (Count == 0)
+            if (_Count == 0)
                 return false;
 
             var callback = new ContainsValueCallback(value);
