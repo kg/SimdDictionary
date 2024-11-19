@@ -13,9 +13,6 @@ namespace SimdDictionary {
         where K : notnull
     {
         public const int InitialCapacity = 0,
-            // User-specified capacity values will be increased by this percentage in order
-            //  to maintain an ideal load factor, if set to >= 100.
-            OversizePercentage = 100,
             BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;

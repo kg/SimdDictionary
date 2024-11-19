@@ -364,7 +364,11 @@ namespace Benchmarks {
     public abstract class MemoryUsage<T> : DictSuiteBase<T>
         where T : IDictionary<TKey, TValue> {
 
-        public int MinCapacity = 0, 
+        public int MinCapacity = 0,
+            // Specifically one of the primes from HashHelpers' primes list since the BCL dictionary uses prime bucket counts
+            // This is slightly unkind to UnorderedDictionary but not dramatically so, if my math is correct our waste %
+            //  at this size is not very high, so it works out to a pretty fair comparison. A perfect comparison is impossible
+            //  unless there's a point I missed where the two dictionaries have equal overhead
             MaxCapacity = 8419,
             MaxSmallSize = 28,
             CapacityStep = 4;
