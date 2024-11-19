@@ -53,8 +53,8 @@ namespace Benchmarks {
             // We initialize with Size items and then add Size more during insertion benchmark
             if (Populate) {
                 // thanks nativeaot
-                if (typeof(T) == typeof(SimdDictionary.UnorderedDictionary<TKey, TValue>))
-                    Dict = (T)(object)new SimdDictionary.UnorderedDictionary<TKey, TValue>(Size);
+                if (typeof(T) == typeof(SimdDictionary.VectorizedDictionary<TKey, TValue>))
+                    Dict = (T)(object)new SimdDictionary.VectorizedDictionary<TKey, TValue>(Size);
                 else if (typeof(T) == typeof(Dictionary<TKey, TValue>))
                     Dict = (T)(object)new Dictionary<TKey, TValue>(Size);
                 else

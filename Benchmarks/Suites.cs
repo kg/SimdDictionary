@@ -60,11 +60,11 @@ namespace Benchmarks {
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
-    public class SimdInsertion : Insertion<UnorderedDictionary<TKey, TValue>> {
+    public class SimdInsertion : Insertion<VectorizedDictionary<TKey, TValue>> {
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
-    public class SimdLookup : Lookup<UnorderedDictionary<TKey, TValue>> {
+    public class SimdLookup : Lookup<VectorizedDictionary<TKey, TValue>> {
         protected override bool TryGetValue (long key, out long value) =>
             Dict.TryGetValue(key, out value);
 
@@ -77,30 +77,30 @@ namespace Benchmarks {
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
-    public class SimdRemoval : Removal<UnorderedDictionary<TKey, TValue>> { 
+    public class SimdRemoval : Removal<VectorizedDictionary<TKey, TValue>> { 
     }
 
-    public class SimdClearing : Clearing<UnorderedDictionary<TKey, TValue>> { 
-    }
-
-    [MemoryDiagnoser()]
-    public class SimdResize : Resize<UnorderedDictionary<TKey, TValue>> {
+    public class SimdClearing : Clearing<VectorizedDictionary<TKey, TValue>> { 
     }
 
     [MemoryDiagnoser()]
-    public class SimdCollisions : Collisions<UnorderedDictionary<Collider, Collider>, Collider> {
+    public class SimdResize : Resize<VectorizedDictionary<TKey, TValue>> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdTailCollisions : Collisions<UnorderedDictionary<TailCollider, TailCollider>, TailCollider> {
+    public class SimdCollisions : Collisions<VectorizedDictionary<Collider, Collider>, Collider> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdHeadCollisions : Collisions<UnorderedDictionary<HeadCollider, HeadCollider>, HeadCollider> {
+    public class SimdTailCollisions : Collisions<VectorizedDictionary<TailCollider, TailCollider>, TailCollider> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdIterate : Iterate<UnorderedDictionary<TKey, TValue>> {
+    public class SimdHeadCollisions : Collisions<VectorizedDictionary<HeadCollider, HeadCollider>, HeadCollider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class SimdIterate : Iterate<VectorizedDictionary<TKey, TValue>> {
         protected override IEnumerable<TKey> GetKeys () => ((IDictionary<TKey, TValue>)Dict).Keys;
         protected override IEnumerable<TValue> GetValues () => ((IDictionary<TKey, TValue>)Dict).Values;
     }
@@ -110,14 +110,14 @@ namespace Benchmarks {
     }
 
     [MemoryDiagnoser()]
-    public class SimdMemoryUsage : MemoryUsage<UnorderedDictionary<TKey, TValue>> {
+    public class SimdMemoryUsage : MemoryUsage<VectorizedDictionary<TKey, TValue>> {
     }
 
     public class ClearingWithRefs {
         const int Size = 40960;
 
         public Dictionary<string, string> BCL = new (Size);
-        public UnorderedDictionary<string, string> SIMD = new (Size);
+        public VectorizedDictionary<string, string> SIMD = new (Size);
         public List<string> Strings = new (Size);
 
         [GlobalSetup]
@@ -164,7 +164,7 @@ namespace Benchmarks {
         const int Size = 40960;
 
         public Dictionary<string, long> BCL = new (Size, new OpaqueComparer());
-        public UnorderedDictionary<string, long> SIMD = new (Size, new OpaqueComparer());
+        public VectorizedDictionary<string, long> SIMD = new (Size, new OpaqueComparer());
         public List<string> Strings = new (Size);
 
         [GlobalSetup]
@@ -201,7 +201,7 @@ namespace Benchmarks {
         const int Size = 102400;
 
         public Dictionary<int, long> BCL = new (Size);
-        public UnorderedDictionary<int, long> SIMD = new (Size);
+        public VectorizedDictionary<int, long> SIMD = new (Size);
 
         [GlobalSetup]
         public void Setup () {
@@ -256,7 +256,7 @@ namespace Benchmarks {
         const int Size = 10240;
 
         public Dictionary<int, BigStruct> BCL = new (Size);
-        public UnorderedDictionary<int, BigStruct> SIMD = new (Size);
+        public VectorizedDictionary<int, BigStruct> SIMD = new (Size);
 
         [GlobalSetup]
         public void Setup () {
@@ -322,7 +322,7 @@ namespace Benchmarks {
         const int Size = 10240;
 
         public Dictionary<int, long> BCL = new (Size);
-        public UnorderedDictionary<int, long> SIMD = new (Size);
+        public VectorizedDictionary<int, long> SIMD = new (Size);
         public Func<int, long, long> AddOrUpdateCallback;
 
         public Permutation () {
@@ -368,7 +368,7 @@ namespace Benchmarks {
     public class Enumeration {
         const int Size = 10240;
 
-        public UnorderedDictionary<int, long> SIMD = new (Size);
+        public VectorizedDictionary<int, long> SIMD = new (Size);
 
         [GlobalSetup]
         public void Setup () {
@@ -420,7 +420,7 @@ namespace Benchmarks {
         const int Size = 10240;
 
         public Dictionary<int, long> BCL = new (Size);
-        public UnorderedDictionary<int, long> SIMD = new (Size);
+        public VectorizedDictionary<int, long> SIMD = new (Size);
         public Func<int, long> ValueFactory;
 
         public GetOrAdd () {
@@ -498,8 +498,8 @@ namespace Benchmarks {
 
         public Dictionary<string, long> BCL = new (Size, new OpaqueComparer());
         public Dictionary<string, long>.AlternateLookup<ReadOnlySpan<char>> BCLLookup;
-        public UnorderedDictionary<string, long> SIMD = new (Size, new OpaqueComparer());
-        public UnorderedDictionary<string, long>.AlternateLookup<ReadOnlySpan<char>> SIMDLookup;
+        public VectorizedDictionary<string, long> SIMD = new (Size, new OpaqueComparer());
+        public VectorizedDictionary<string, long>.AlternateLookup<ReadOnlySpan<char>> SIMDLookup;
         public HashSet<string> Strings = new (Size);
 
         [GlobalSetup]

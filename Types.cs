@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    public partial class UnorderedDictionary<K, V>
+    public partial class VectorizedDictionary<K, V>
         where K : notnull
     {
         public const int InitialCapacity = 0,

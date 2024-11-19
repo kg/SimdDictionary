@@ -48,7 +48,7 @@ namespace Benchmarks {
             List<TValue> values = new (c);
 
             List<TailCollider> tcs = new();
-            var tcTest = new UnorderedDictionary<TailCollider, int>();
+            var tcTest = new VectorizedDictionary<TailCollider, int>();
             for (int i = 0; i < f; i++) {
                 var tc = new TailCollider();
                 tcs.Add(tc);
@@ -69,17 +69,17 @@ namespace Benchmarks {
             }
 
             // Validate that pre-sized dictionaries don't grow
-            var capTest = new UnorderedDictionary<TKey, TValue>(UnorderedDictionary<TKey, TValue>.BucketSizeI);
-            if (capTest.Capacity != UnorderedDictionary<TKey, TValue>.BucketSizeI)
+            var capTest = new VectorizedDictionary<TKey, TValue>(VectorizedDictionary<TKey, TValue>.BucketSizeI);
+            if (capTest.Capacity != VectorizedDictionary<TKey, TValue>.BucketSizeI)
                 throw new Exception("Pre-sized dict capacity is wrong");
 
             for (int i = 0; i < capTest.Capacity; i++)
                 capTest.Add(i, i);
-            if (capTest.Capacity != UnorderedDictionary<TKey, TValue>.BucketSizeI)
+            if (capTest.Capacity != VectorizedDictionary<TKey, TValue>.BucketSizeI)
                 throw new Exception("Pre-sized dict grew after filling");
 
             // Don't pre-allocate capacity, so that we check growth/rehashing
-            var test = new UnorderedDictionary<TKey, TValue>(0);
+            var test = new VectorizedDictionary<TKey, TValue>(0);
 
             for (int i = 0; i < c; i++) {
                 var key = NextKey(rng);
@@ -120,7 +120,7 @@ namespace Benchmarks {
             var keyList = test.Keys.ToArray();
             var valueList = test.Values.ToArray();
 
-            var copy = new UnorderedDictionary<TKey, TValue>(test);
+            var copy = new VectorizedDictionary<TKey, TValue>(test);
             for (int j = 0; j < e; j++)
             {
                 for (int i = 0; i < c; i++)

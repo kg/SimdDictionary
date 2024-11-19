@@ -6,14 +6,14 @@ using System.Runtime.Intrinsics;
 
 namespace SimdDictionary
 {
-    public partial class UnorderedDictionary<K, V> {
+    public partial class VectorizedDictionary<K, V> {
         public readonly struct AlternateLookup<TAlternateKey>
             where TAlternateKey : notnull, allows ref struct {
 
-            public readonly UnorderedDictionary<K, V> Dictionary;
+            public readonly VectorizedDictionary<K, V> Dictionary;
             public readonly IAlternateEqualityComparer<TAlternateKey, K> Comparer;
 
-            public AlternateLookup (UnorderedDictionary<K, V> dictionary, IAlternateEqualityComparer<TAlternateKey, K> comparer) {
+            public AlternateLookup (VectorizedDictionary<K, V> dictionary, IAlternateEqualityComparer<TAlternateKey, K> comparer) {
                 if (dictionary == null)
                     throw new ArgumentNullException(nameof(dictionary));
                 if (comparer == null)

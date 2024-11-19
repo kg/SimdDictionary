@@ -21,11 +21,11 @@ namespace SimdDictionary {
         //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
         //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
         //  we're empty.
-        public static readonly UnorderedDictionary<K, V>.Bucket[] EmptyBuckets = new UnorderedDictionary<K, V>.Bucket[1];
+        public static readonly VectorizedDictionary<K, V>.Bucket[] EmptyBuckets = new VectorizedDictionary<K, V>.Bucket[1];
 #pragma warning restore CA1825
     }
 
-    public partial class UnorderedDictionary<K, V> : 
+    public partial class VectorizedDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
         ICollection<KeyValuePair<K, V>>, ICloneable
         where K : notnull
@@ -47,19 +47,19 @@ namespace SimdDictionary {
 
         private Bucket[] _Buckets = SimdDictionaryHelpers<K, V>.EmptyBuckets;
 
-        public UnorderedDictionary () 
+        public VectorizedDictionary () 
             : this (InitialCapacity, null) {
         }
 
-        public UnorderedDictionary (int capacity)
+        public VectorizedDictionary (int capacity)
             : this (capacity, null) {
         }
 
-        public UnorderedDictionary (IEqualityComparer<K>? comparer)
+        public VectorizedDictionary (IEqualityComparer<K>? comparer)
             : this (InitialCapacity, comparer) {
         }
 
-        public UnorderedDictionary (int capacity, IEqualityComparer<K>? comparer) {
+        public VectorizedDictionary (int capacity, IEqualityComparer<K>? comparer) {
             if (typeof(K).IsValueType)
                 Comparer = comparer;
             // HACK: DefaultEqualityComparer<K> for string is really bad
@@ -70,7 +70,7 @@ namespace SimdDictionary {
             EnsureCapacity(capacity);
         }
 
-        public UnorderedDictionary (UnorderedDictionary<K, V> source) {
+        public VectorizedDictionary (VectorizedDictionary<K, V> source) {
             Comparer = source.Comparer;
             _Count = source._Count;
             _Capacity = source._Capacity;
@@ -135,9 +135,9 @@ namespace SimdDictionary {
         }
 
         internal readonly struct RehashCallback : IPairCallback {
-            public readonly UnorderedDictionary<K, V> Self;
+            public readonly VectorizedDictionary<K, V> Self;
 
-            public RehashCallback (UnorderedDictionary<K, V> self) {
+            public RehashCallback (VectorizedDictionary<K, V> self) {
                 Self = self;
             }
 
@@ -614,7 +614,7 @@ namespace SimdDictionary {
         }
 
         public object Clone () =>
-            new UnorderedDictionary<K, V>(this);
+            new VectorizedDictionary<K, V>(this);
 
         private struct CopyToKvp : IPairCallback {
             public readonly KeyValuePair<K, V>[] Array;

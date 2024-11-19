@@ -6,7 +6,7 @@ using System.Runtime.Intrinsics;
 using System.Text;
 using System.Threading.Tasks;
 using SimdDictionary;
-using D = SimdDictionary.UnorderedDictionary<string, long>;
+using D = SimdDictionary.VectorizedDictionary<string, long>;
 using K = string;
 
 public static class DisasmHarness
