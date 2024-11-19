@@ -25,7 +25,7 @@ public static class DisasmHarness
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryAdd (D dict, K presentKey) =>
-        dict.TryInsert(presentKey, 1, D.InsertMode.EnsureUnique) == D.InsertResult.OkAddedNew;
+        dict.TryAdd(presentKey, 1);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryRemove (D dict, int i, K missingKey, K presentKey) =>

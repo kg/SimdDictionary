@@ -4,6 +4,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
@@ -98,7 +99,7 @@ namespace SimdDictionary {
             Resize(Math.Max(capacity, nextIncrement));
         }
 
-        internal void Resize (int capacity) {
+        private void Resize (int capacity) {
             int bucketCount;
             ulong fastModMultiplier;
 
@@ -142,7 +143,8 @@ namespace SimdDictionary {
             }
 
             public bool Pair (ref Pair pair) {
-                if (Self.TryInsert(pair.Key, pair.Value, InsertMode.Rehashing) != InsertResult.OkAddedNew)
+                Self.TryInsert(pair.Key, pair.Value, InsertMode.Rehashing, out var result);
+                if (result != InsertResult.OkAddedNew)
                     ThrowCorrupted();
                 return true;
             }
@@ -173,7 +175,7 @@ namespace SimdDictionary {
         // The hash suffix is selected from 8 bits of the hash, and then modified to ensure
         //  it is never zero (because a zero suffix indicates an empty slot.)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static byte GetHashSuffix (uint hashCode) {
+        private static byte GetHashSuffix (uint hashCode) {
             var result = unchecked((byte)hashCode);
             // Assuming the JIT turns this into a cmov, this should be better on average
             //  since it nearly doubles the number of possible suffixes, improving collision
@@ -182,7 +184,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
+        private int BucketIndexForHashCode (uint hashCode, Span<Bucket> buckets) =>
             // NOTE: If the caller observes a new _fastModMultiplier before seeing a larger buckets array,
             //  this can overrun the end of the array.
             unchecked((int)HashHelpers.FastMod(
@@ -192,6 +194,7 @@ namespace SimdDictionary {
                 Volatile.Read(ref _fastModMultiplier)
             ));
 
+        // Internal for access from CollectionsMarshal
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ref Pair FindKey (K key) {
             var comparer = Comparer;
@@ -204,7 +207,7 @@ namespace SimdDictionary {
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is roughly halved.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        private ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
@@ -229,20 +232,19 @@ namespace SimdDictionary {
             return ref Unsafe.NullRef<Pair>();
         }
 
-        // public for Disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public InsertResult TryInsert (K key, V value, InsertMode mode) {
+        internal ref Pair TryInsert (K key, V value, InsertMode mode, out InsertResult result) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
-                return TryInsert<DefaultComparerKeySearcher>(key, value, mode, null);
+                return ref TryInsert<DefaultComparerKeySearcher>(key, value, mode, null, out result);
             else
-                return TryInsert<ComparerKeySearcher>(key, value, mode, comparer);
+                return ref TryInsert<ComparerKeySearcher>(key, value, mode, comparer, out result);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, K key, V value) {
+        private static ref Pair TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, K key, V value) {
             if (bucketCount >= BucketSizeI)
-                return false;
+                return ref Unsafe.NullRef<Pair>();
 
             unchecked {
                 ref var destination = ref Unsafe.Add(ref bucket.Pairs.Pair0, bucketCount);
@@ -250,14 +252,13 @@ namespace SimdDictionary {
                 bucket.SetSlot((nuint)bucketCount, suffix);
                 destination.Key = key;
                 destination.Value = value;
+                return ref destination;
             }
-
-            return true;
         }
 
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal InsertResult TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer) 
+        private ref Pair TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer, out InsertResult result) 
             where TKeySearcher : struct, IKeySearcher 
         {
             var needToGrow = (_Count >= _Capacity);
@@ -265,8 +266,11 @@ namespace SimdDictionary {
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
             // Pipelining: Perform the actual branch later, since in the common case we won't need to grow.
-            if (needToGrow)
-                return InsertResult.NeedToGrow;
+            if (needToGrow) {
+                result = InsertResult.NeedToGrow;
+                return ref Unsafe.NullRef<Pair>();
+            }
+
             var enumerator = new LoopingBucketEnumerator(this, hashCode);
             do {
                 int bucketCount = enumerator.bucket.Count;
@@ -275,26 +279,31 @@ namespace SimdDictionary {
                     ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
 
                     if (!Unsafe.IsNullRef(ref pair)) {
-                        if (mode == InsertMode.EnsureUnique)
-                            return InsertResult.KeyAlreadyPresent;
-                        else {
+                        if (mode == InsertMode.EnsureUnique) {
+                            result = InsertResult.KeyAlreadyPresent;
+                            return ref pair;
+                        } else {
                             pair.Value = value;
-                            return InsertResult.OkOverwroteExisting;
+                            result = InsertResult.OkOverwroteExisting;
+                            return ref pair;
                         }
                     } else if (startIndex < BucketSizeI) {
                         // FIXME: Suffix collision. Track these for string rehashing anti-DoS mitigation!
                     }
                 }
 
-                if (TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, key, value)) {
+                ref var insertLocation = ref TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, key, value);
+                if (!Unsafe.IsNullRef(ref insertLocation)) {
                     // Increase the cascade counters for the buckets we checked before this one.
                     AdjustCascadeCounts(enumerator, true);
 
-                    return InsertResult.OkAddedNew;
+                    result = InsertResult.OkAddedNew;
+                    return ref insertLocation;
                 }
             } while (enumerator.Advance(this));
 
-            return InsertResult.CorruptedInternalState;
+            result = InsertResult.CorruptedInternalState;
+            return ref Unsafe.NullRef<Pair>();
         }
 
         // Inlining required for disasmo
@@ -373,8 +382,8 @@ namespace SimdDictionary {
             }
             set {
             retry:
-                var insertResult = TryInsert(key, value, InsertMode.OverwriteValue);
-                switch (insertResult) {
+                TryInsert(key, value, InsertMode.OverwriteValue, out var result);
+                switch (result) {
                     case InsertResult.OkAddedNew:
                         _Count++;
                         return;
@@ -426,10 +435,12 @@ namespace SimdDictionary {
                 throw new ArgumentException($"Key already exists: {key}");
         }
 
+        // Inlining required for disasmo
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryAdd (K key, V value) {
         retry:
-            var insertResult = TryInsert(key, value, InsertMode.EnsureUnique);
-            switch (insertResult) {
+            TryInsert(key, value, InsertMode.EnsureUnique, out var result);
+            switch (result) {
                 case InsertResult.OkAddedNew:
                     _Count++;
                     return true;
@@ -581,36 +592,30 @@ namespace SimdDictionary {
             }
         }
 
-        // Inlining required for disasmo
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public ref readonly V GetValueRefOrNullRef (K key) {
-            ref var pair = ref FindKey(key);
-            if (Unsafe.IsNullRef(ref pair))
-                return ref Unsafe.NullRef<V>();
-            return ref pair.Value;
-        }
-
         public V AddOrUpdate (K key, V addValue, Func<K, V, V> updateValueFactory) {
-            // FIXME: Write a dedicated implementation that works in a single pass, based on TryInsert?
-            ref var pair = ref FindKey(key);
-            if (Unsafe.IsNullRef(ref pair)) {
-                if (TryInsert(key, addValue, InsertMode.EnsureUnique) != InsertResult.OkAddedNew)
-                    ThrowConcurrentModification();
-                return addValue;
-            } else {
+            ref var pair = ref TryInsert(key, addValue, InsertMode.EnsureUnique, out var result);
+            if (result == InsertResult.KeyAlreadyPresent) {
                 return pair.Value = updateValueFactory(key, pair.Value);
+            } else if (result != InsertResult.OkAddedNew) {
+                ThrowConcurrentModification();
+                return default!;
+            } else {
+                return addValue;
             }
         }
 
         public V GetOrAdd (K key, Func<K, V> valueFactory) {
-            // FIXME: Write a dedicated implementation that works in a single pass, based on TryInsert?
-            ref var pair = ref FindKey(key);
-            if (Unsafe.IsNullRef(ref pair)) {
-                var value = valueFactory(key);
-                TryInsert(key, value, InsertMode.GetOrAdd);
-                return value;
-            } else
+            // We insert a placeholder if the key is not already present, then overwrite the placeholder.
+            // This is faster than doing two passes.
+            ref var pair = ref TryInsert(key, default!, InsertMode.EnsureUnique, out var result);
+            if (result == InsertResult.OkAddedNew) {
+                return pair.Value = valueFactory(key);
+            } else if (result != InsertResult.KeyAlreadyPresent) {
+                ThrowConcurrentModification();
+                return default!;
+            } else {
                 return pair.Value;
+            }
         }
 
         public object Clone () =>
