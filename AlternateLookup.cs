@@ -11,7 +11,7 @@ namespace SimdDictionary {
             public readonly VectorizedDictionary<K, V> Dictionary;
             public readonly IAlternateEqualityComparer<TAlternateKey, K> Comparer;
 
-            public AlternateLookup (VectorizedDictionary<K, V> dictionary, IAlternateEqualityComparer<TAlternateKey, K> comparer) {
+            internal AlternateLookup (VectorizedDictionary<K, V> dictionary, IAlternateEqualityComparer<TAlternateKey, K> comparer) {
                 if (dictionary == null)
                     throw new ArgumentNullException(nameof(dictionary));
                 if (comparer == null)

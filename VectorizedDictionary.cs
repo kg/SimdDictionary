@@ -94,11 +94,10 @@ namespace SimdDictionary {
         }
 
         private void Resize (int capacity) {
-            int bucketCount;
+            int bucketCount, actualCapacity;
             ulong fastModMultiplier;
 
             checked {
-                capacity = (int)((long)capacity * OversizePercentage / 100);
                 if (capacity < 1)
                     capacity = 1;
 
@@ -106,21 +105,19 @@ namespace SimdDictionary {
 
                 bucketCount = bucketCount > 1 ? HashHelpers.GetPrime(bucketCount) : 1;
                 fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
-            }
-
-            var actualCapacity = bucketCount * BucketSizeI;
-            var oldBuckets = _Buckets;
-            checked {
-                _Capacity = (int)(((long)actualCapacity) * 100 / OversizePercentage);
+                actualCapacity = bucketCount * BucketSizeI;
             }
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
+
+            var oldBuckets = _Buckets;
             _Buckets = newBuckets;
-            // HACK: Ensure we store a new larger bucket array before storing the fastModMultiplier for the larger size.
+            // HACK: Ensure we store a new larger bucket array before storing the larger fastModMultiplier and capacity.
             // This ensures that concurrent modification will not produce a bucket index that is too big.
             Thread.MemoryBarrier();
             _fastModMultiplier = fastModMultiplier;
+            _Capacity = actualCapacity;
 
             // FIXME: In-place rehashing
             if ((oldBuckets != Statics.EmptyBuckets) && (_Count > 0)) {
@@ -170,8 +167,11 @@ namespace SimdDictionary {
         //  it is never zero (because a zero suffix indicates an empty slot.)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static byte GetHashSuffix (uint hashCode) {
+            // We could shift by 24 bits to take the other end of the value, but taking the low 8
+            //  bits produces better results for the common scenario where you're using sequential
+            //  integers as keys (since their default hash is the identity function).
             var result = unchecked((byte)hashCode);
-            // Assuming the JIT turns this into a cmov, this should be better on average
+            // Assuming the JIT turns this into a cmov, this should be better than a bitwise or
             //  since it nearly doubles the number of possible suffixes, improving collision
             //  resistance and reducing the odds of having to check multiple keys.
             return result == 0 ? (byte)255 : result;

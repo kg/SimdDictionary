@@ -220,6 +220,7 @@ namespace SimdDictionary {
                 _valueIndexLocal = BucketSizeI;
             }
         }
+
         public ref struct RefEnumerator {
             private int _bucketIndex, _valueIndexLocal;
             // FIXME: Make a copy of the current bucket as we walk, so that modification during enumeration isn't hazardous?

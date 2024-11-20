@@ -13,14 +13,11 @@ namespace SimdDictionary {
         where K : notnull
     {
         public const int InitialCapacity = 0,
-            // User-specified capacity values will be increased by this percentage in order
-            //  to maintain an ideal load factor, if set to >= 100.
-            OversizePercentage = 100,
             BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;
 
-        public delegate bool ForEachCallback (int i, in K key, ref V value);
+        public delegate bool ForEachCallback (int index, in K key, ref V value);
 
         // Internal for use by CollectionsMarshal
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -74,7 +71,7 @@ namespace SimdDictionary {
             }
         }
 
-        public enum InsertMode {
+        internal enum InsertMode {
             // Fail the insertion if a matching key is found
             EnsureUnique,
             // Overwrite the value if a matching key is found
@@ -82,11 +79,9 @@ namespace SimdDictionary {
             // Don't scan for existing matches before inserting into the bucket. This is only
             //  safe to do when copying an existing dictionary or rehashing an existing dictionary
             Rehashing,
-            // TODO: Alias to Rehashing for performance? Dangerous in the event there is concurrent modification
-            GetOrAdd = EnsureUnique
         }
 
-        public enum InsertResult {
+        internal enum InsertResult {
             // The specified key did not exist in the dictionary, and a key/value pair was inserted
             OkAddedNew,
             // The specified key was found in the dictionary and we overwrote the value
