@@ -8,24 +8,23 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    internal static class SimdDictionaryHelpers<K, V>
-        where K : notnull {
-#pragma warning disable CA1825
-        // HACK: Move this readonly field out of the dictionary type so it doesn't have a cctor.
-        // This removes a cctor check from some hot paths (I think?)
-        // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
-        //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
-        //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
-        //  we're empty.
-        public static readonly VectorizedDictionary<K, V>.Bucket[] EmptyBuckets = new VectorizedDictionary<K, V>.Bucket[1];
-#pragma warning restore CA1825
-    }
-
     public partial class VectorizedDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
         ICollection<KeyValuePair<K, V>>, ICloneable
         where K : notnull
     {
+        private static class Statics {
+    #pragma warning disable CA1825
+            // HACK: Move this readonly field out of the dictionary type so it doesn't have a cctor.
+            // This removes a cctor check from some hot paths (I think?)
+            // HACK: All empty SimdDictionary instances share a single-bucket EmptyBuckets array, so that Find and Remove
+            //  operations don't need to do a (_Count == 0) check. This also makes some other uses of ref and MemoryMarshal
+            //  safe-by-definition instead of fragile, since we always have a valid reference to the "first" bucket, even when
+            //  we're empty.
+            public static readonly Bucket[] EmptyBuckets = new Bucket[1];
+    #pragma warning restore CA1825
+        }
+
         public readonly IEqualityComparer<K>? Comparer;
 
         // In SCG.Dictionary, Keys and Values are on-demand-allocated classes. Here, they are on-demand-created structs.
@@ -41,7 +40,7 @@ namespace SimdDictionary {
             _Capacity = 0;
         private ulong _fastModMultiplier;
 
-        private Bucket[] _Buckets = SimdDictionaryHelpers<K, V>.EmptyBuckets;
+        private Bucket[] _Buckets = Statics.EmptyBuckets;
 
         public VectorizedDictionary () 
             : this (InitialCapacity, null) {
@@ -71,7 +70,7 @@ namespace SimdDictionary {
             _Count = source._Count;
             _Capacity = source._Capacity;
             _fastModMultiplier = source._fastModMultiplier;
-            if (source._Buckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) {
+            if (source._Buckets != Statics.EmptyBuckets) {
                 _Buckets = new Bucket[source._Buckets.Length];
                 Array.Copy(source._Buckets, _Buckets, source._Buckets.Length);
             }
@@ -87,7 +86,7 @@ namespace SimdDictionary {
             if (Capacity >= capacity)
                 return;
 
-            int nextIncrement = (_Buckets == SimdDictionaryHelpers<K, V>.EmptyBuckets)
+            int nextIncrement = (_Buckets == Statics.EmptyBuckets)
                 ? capacity
                 : Capacity * 2;
 
@@ -124,7 +123,7 @@ namespace SimdDictionary {
             _fastModMultiplier = fastModMultiplier;
 
             // FIXME: In-place rehashing
-            if ((oldBuckets != SimdDictionaryHelpers<K, V>.EmptyBuckets) && (_Count > 0)) {
+            if ((oldBuckets != Statics.EmptyBuckets) && (_Count > 0)) {
                 var c = new RehashCallback(this);
                 EnumeratePairs(oldBuckets, ref c);
             }

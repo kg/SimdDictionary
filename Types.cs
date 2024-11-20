@@ -22,6 +22,7 @@ namespace SimdDictionary {
 
         public delegate bool ForEachCallback (int i, in K key, ref V value);
 
+        // Internal for use by CollectionsMarshal
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         internal struct Pair {
             public K Key;
@@ -31,12 +32,12 @@ namespace SimdDictionary {
         // This size must match or exceed BucketSizeI
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         [InlineArray(14)]
-        internal struct InlinePairArray {
+        private struct InlinePairArray {
             public Pair Pair0;
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 16)]
-        internal struct Bucket {
+        private struct Bucket {
             public Vector128<byte> Suffixes;
             public InlinePairArray Pairs;
             // For 8-byte keys + values this makes a bucket 256 bytes, changing the native code for the lookup
@@ -100,7 +101,7 @@ namespace SimdDictionary {
 
         // We have separate implementations of FindKeyInBucket that get used depending on whether we have a null
         //  comparer for a valuetype, where we can rely on ryujit to inline EqualityComparer<K>.Default
-        internal interface IKeySearcher {
+        private interface IKeySearcher {
             static abstract ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, int startIndexInBucket, int bucketCount,
@@ -111,13 +112,13 @@ namespace SimdDictionary {
         }
 
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. Clear)
-        internal interface IBucketCallback {
+        private interface IBucketCallback {
             // Return false to stop iteration
             abstract bool Bucket (ref Bucket bucket);
         }
 
         // Used to encapsulate operations that enumerate all the occupied slots synchronously (i.e. CopyTo)
-        internal interface IPairCallback {
+        private interface IPairCallback {
             // Return false to stop iteration
             abstract bool Pair (ref Pair pair);
         }

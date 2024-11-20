@@ -18,7 +18,7 @@ namespace SimdDictionary {
         // Extracting all this logic into each caller improves codegen slightly + reduces code size slightly, but the
         //  duplication reduces maintainability, so I'm pretty happy doing this instead.
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
-        internal ref struct LoopingBucketEnumerator {
+        private ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
             // The current size is small enough for TryGetValue to have a register to spare, and for TryInsert to barely avoid touching stack.
             public ref Bucket bucket, lastBucket;
@@ -129,7 +129,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static unsafe int FindSuffixInBucket (ref Bucket bucket, Vector128<byte> searchVector, int bucketCount) {
+        private static unsafe int FindSuffixInBucket (ref Bucket bucket, Vector128<byte> searchVector, int bucketCount) {
 #if !FORCE_SCALAR_IMPLEMENTATION
             if (Sse2.IsSupported) {
                 return BitOperations.TrailingZeroCount(Sse2.MoveMask(Sse2.CompareEqual(searchVector, bucket.Suffixes)));
@@ -213,7 +213,7 @@ namespace SimdDictionary {
         // In the common case this method never runs, but inlining allows some smart stuff to happen in terms of stack size and
         //  register usage.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void AdjustCascadeCounts (
+        private void AdjustCascadeCounts (
             LoopingBucketEnumerator enumerator, bool increase
         ) {
             // Early-out before doing setup work since in the common case we won't have cascaded out of a bucket at all
@@ -246,7 +246,7 @@ namespace SimdDictionary {
 
 #pragma warning disable CS8619
         // These have to be structs so that the JIT will specialize callers instead of Canonizing them
-        internal struct DefaultComparerKeySearcher : IKeySearcher {
+        private struct DefaultComparerKeySearcher : IKeySearcher {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
@@ -284,7 +284,7 @@ namespace SimdDictionary {
             }
         }
 
-        internal struct ComparerKeySearcher : IKeySearcher {
+        private struct ComparerKeySearcher : IKeySearcher {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
                 return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
