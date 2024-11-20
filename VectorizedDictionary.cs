@@ -1,16 +1,11 @@
 ﻿// Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
 // #define PERMUTE_HASH_CODES
 
-using System;
 using System.Collections;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Serialization;
 
 namespace SimdDictionary {
     internal static class SimdDictionaryHelpers<K, V>

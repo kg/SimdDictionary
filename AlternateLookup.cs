@@ -1,11 +1,9 @@
-﻿using System;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 
-namespace SimdDictionary
-{
+namespace SimdDictionary {
     public partial class VectorizedDictionary<K, V> {
         public readonly struct AlternateLookup<TAlternateKey>
             where TAlternateKey : notnull, allows ref struct {
@@ -31,6 +29,11 @@ namespace SimdDictionary
                 }
             }
 
+            public bool ContainsKey (TAlternateKey key) {
+                ref var pair = ref FindKey(key);
+                return !Unsafe.IsNullRef(ref pair);
+            }
+
             public bool TryGetValue (TAlternateKey key, out V value) {
                 ref var pair = ref FindKey(key);
                 if (Unsafe.IsNullRef(ref pair)) {
@@ -42,8 +45,13 @@ namespace SimdDictionary
                 }
             }
 
+            public bool TryAdd (TAlternateKey key, V value) {
+                // FIXME: Duplicate the TryInsert logic from SimdDictionary to avoid the Create call when there is a key collision
+                return Dictionary.TryAdd(Comparer.Create(key), value);
+            }
+
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal ref Pair FindKey (TAlternateKey key) {
+            private ref Pair FindKey (TAlternateKey key) {
                 // This is duplicated from SimdDictionary.FindKey, look there for comments.
                 var dictionary = Dictionary;
 
@@ -67,7 +75,7 @@ namespace SimdDictionary
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            internal static ref Pair FindKeyInBucket (
+            private static ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket,
                 int indexInBucket, int bucketCount, IAlternateEqualityComparer<TAlternateKey, K> comparer, 
