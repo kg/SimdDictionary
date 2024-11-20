@@ -135,7 +135,7 @@ namespace SimdDictionary {
             }
         }
 
-        internal readonly struct RehashCallback : IPairCallback {
+        private readonly struct RehashCallback : IPairCallback {
             public readonly VectorizedDictionary<K, V> Self;
 
             public RehashCallback (VectorizedDictionary<K, V> self) {
@@ -151,7 +151,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static uint FinalizeHashCode (uint hashCode) {
+        private static uint FinalizeHashCode (uint hashCode) {
             // TODO: Use static interface methods to determine whether we need to finalize the hash for type K.
             // For BCL types like int32/int64, we need to, but for types with strong hashes like string, we don't,
             //  and for custom comparers, we don't need to do it since the caller is kind of responsible for 
@@ -232,6 +232,7 @@ namespace SimdDictionary {
             return ref Unsafe.NullRef<Pair>();
         }
 
+        // Internal for access from CollectionsMarshal
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ref Pair TryInsert (K key, V value, InsertMode mode, out InsertResult result) {
             var comparer = Comparer;
@@ -317,7 +318,7 @@ namespace SimdDictionary {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, int bucketCount, ref Pair toRemove) {
+        private static void RemoveFromBucket (ref Bucket bucket, int indexInBucket, int bucketCount, ref Pair toRemove) {
             Debug.Assert(bucketCount > 0);
             unchecked {
                 int replacementIndexInBucket = bucketCount - 1;
@@ -343,7 +344,7 @@ namespace SimdDictionary {
 
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        private bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
@@ -457,7 +458,7 @@ namespace SimdDictionary {
         void ICollection<KeyValuePair<K, V>>.Add (KeyValuePair<K, V> item) =>
             Add(item.Key, item.Value);
 
-        internal readonly struct ClearCallback : IBucketCallback {
+        private readonly struct ClearCallback : IBucketCallback {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Bucket (ref Bucket bucket) {
                 int c = bucket.Count;
@@ -512,7 +513,7 @@ namespace SimdDictionary {
         public bool ContainsKey (K key) =>
             !Unsafe.IsNullRef(ref FindKey(key));
 
-        internal struct ContainsValueCallback : IPairCallback {
+        private struct ContainsValueCallback : IPairCallback {
             public readonly V Value;
             public bool Result;
 
@@ -540,7 +541,7 @@ namespace SimdDictionary {
             return callback.Result;
         }
 
-        internal struct ForEachImpl : IPairCallback {
+        private struct ForEachImpl : IPairCallback {
             private readonly ForEachCallback Callback;
             private int Index;
 
