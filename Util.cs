@@ -16,11 +16,11 @@ namespace SimdDictionary {
             return ref pair.Value;
         }
         
-        public static ref readonly V GetValueRefOrAddDefault<K, V> (this VectorizedDictionary<K, V> self, K key)
+        public static ref readonly V GetValueRefOrAddDefault<K, V> (this VectorizedDictionary<K, V> self, K key, V defaultValue = default!)
             where K : notnull
         {
 retry:
-            ref var pair = ref self.TryInsert(key, default!, VectorizedDictionary<K, V>.InsertMode.EnsureUnique, out var result);
+            ref var pair = ref self.TryInsert(key, defaultValue, VectorizedDictionary<K, V>.InsertMode.EnsureUnique, out var result);
             if (result == VectorizedDictionary<K, V>.InsertResult.NeedToGrow) {
                 self.EnsureCapacity(self.Count + 1);
                 goto retry;
