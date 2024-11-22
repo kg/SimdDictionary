@@ -65,6 +65,15 @@ namespace Benchmarks {
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     public class SimdLookup : Lookup<VectorizedDictionary<TKey, TValue>> {
+        public override void Setup () {
+            base.Setup();
+
+            Dict.AnalyzeBuckets(out int normal, out int overflowed, out int degraded);
+            double total = normal + overflowed + degraded;
+            using (var sw = new StreamWriter("E:\\Desktop\\simdlookup.log", true, Encoding.UTF8))
+                sw.WriteLine($"{overflowed} ({overflowed / total * 100}%) Overflowed; {degraded} ({degraded / total * 100}%) Degraded");
+        }
+
         protected override bool TryGetValue (long key, out long value) =>
             Dict.TryGetValue(key, out value);
 

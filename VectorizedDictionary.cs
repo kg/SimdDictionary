@@ -703,6 +703,28 @@ retry:
             CopyToArray(array, index);
         }
 
+        private struct AnalyzeCallback : IBucketCallback {
+            public int Normal, Overflowed, Degraded;
+
+            public bool Bucket (ref Bucket bucket) {
+                if (bucket.CascadeCount >= 255)
+                    Degraded++;
+                else if (bucket.CascadeCount == 0)
+                    Normal++;
+                else
+                    Overflowed++;
+                return true;
+            }
+        }
+
+        public void AnalyzeBuckets (out int normalBuckets, out int overflowedBuckets, out int degradedBuckets) {
+            var c = new AnalyzeCallback();
+            EnumerateBuckets(_Buckets, ref c);
+            normalBuckets = c.Normal;
+            overflowedBuckets = c.Overflowed;
+            degradedBuckets = c.Degraded;
+        }
+
         void IDictionary.Add (object key, object? value) =>
 #pragma warning disable CS8600
 #pragma warning disable CS8604

@@ -9,7 +9,7 @@ namespace SimdDictionary {
             public readonly VectorizedDictionary<K, V> Dictionary;
 
             public struct Enumerator : IEnumerator<K> {
-                internal VectorizedDictionary<K, V>.Enumerator Inner;
+                private VectorizedDictionary<K, V>.Enumerator Inner;
 
                 public K Current => Inner.CurrentKey;
                 object? IEnumerator.Current => Inner.CurrentKey;
@@ -74,7 +74,7 @@ namespace SimdDictionary {
             public readonly VectorizedDictionary<K, V> Dictionary;
 
             public struct Enumerator : IEnumerator<V> {
-                internal VectorizedDictionary<K, V>.Enumerator Inner;
+                private VectorizedDictionary<K, V>.Enumerator Inner;
 
                 public V Current => Inner.CurrentValue;
                 object? IEnumerator.Current => Inner.CurrentValue;
