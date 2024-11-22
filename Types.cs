@@ -15,7 +15,12 @@ namespace SimdDictionary {
         public const int InitialCapacity = 0,
             // User-specified capacity values will be increased by this percentage in order
             //  to maintain an ideal load factor, if set to >= 100.
-            OversizePercentage = 100,
+            // Raising this above 100 significantly improves performance for failed lookups in full dictionaries
+            // 100% -> 58.95% overflowed buckets in SimdLookup
+            // 110/120/130% -> 18% overflowed buckets
+            // 140% -> 4.57% overflowed buckets
+            // 120 is a compromise value, since 110 was "good enough" for the benchmark but we don't want to overtune for it
+            OversizePercentage = 120,
             BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;

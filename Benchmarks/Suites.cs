@@ -13,11 +13,11 @@ using TValue = System.Int64;
 namespace Benchmarks {
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
-    public class BCLInsertion : Insertion<Dictionary<TKey, TValue>> {
+    public class InsertionBCL : Insertion<Dictionary<TKey, TValue>> {
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
-    public class BCLLookup : Lookup<Dictionary<TKey, TValue>> { 
+    public class LookupBCL : Lookup<Dictionary<TKey, TValue>> { 
         protected override bool TryGetValue (long key, out long value) =>
             Dict.TryGetValue(key, out value);
 
@@ -30,48 +30,50 @@ namespace Benchmarks {
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
-    public class BCLRemoval : Removal<Dictionary<TKey, TValue>> { 
+    public class RemovalBCL : Removal<Dictionary<TKey, TValue>> { 
     }
 
-    public class BCLClearing : Clearing<Dictionary<TKey, TValue>> { 
-    }
-
-    [MemoryDiagnoser()]
-    public class BCLResize : Resize<Dictionary<TKey, TValue>> {
+    public class ClearingBCL : Clearing<Dictionary<TKey, TValue>> { 
     }
 
     [MemoryDiagnoser()]
-    public class BCLCollisions : Collisions<Dictionary<Collider, Collider>, Collider> {
+    public class ResizeBCL : Resize<Dictionary<TKey, TValue>> {
     }
 
     [MemoryDiagnoser()]
-    public class BCLTailCollisions : Collisions<Dictionary<TailCollider, TailCollider>, TailCollider> {
+    public class CollisionsBCL : Collisions<Dictionary<Collider, Collider>, Collider> {
     }
 
     [MemoryDiagnoser()]
-    public class BCLHeadCollisions : Collisions<Dictionary<HeadCollider, HeadCollider>, HeadCollider> {
+    public class TailCollisionsBCL : Collisions<Dictionary<TailCollider, TailCollider>, TailCollider> {
     }
 
     [MemoryDiagnoser()]
-    public class BCLIterate : Iterate<Dictionary<TKey, TValue>> {
+    public class HeadCollisionsBCL : Collisions<Dictionary<HeadCollider, HeadCollider>, HeadCollider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class IterateBCL : Iterate<Dictionary<TKey, TValue>> {
         protected override IEnumerable<TKey> GetKeys () => Dict.Keys;
         protected override IEnumerable<TValue> GetValues () => Dict.Values;
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
-    public class SimdInsertion : Insertion<VectorizedDictionary<TKey, TValue>> {
+    public class InsertionSimd : Insertion<VectorizedDictionary<TKey, TValue>> {
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
-    public class SimdLookup : Lookup<VectorizedDictionary<TKey, TValue>> {
+    public class LookupSimd : Lookup<VectorizedDictionary<TKey, TValue>> {
         public override void Setup () {
             base.Setup();
 
             Dict.AnalyzeBuckets(out int normal, out int overflowed, out int degraded);
             double total = normal + overflowed + degraded;
-            using (var sw = new StreamWriter("E:\\Desktop\\simdlookup.log", true, Encoding.UTF8))
-                sw.WriteLine($"{overflowed} ({overflowed / total * 100}%) Overflowed; {degraded} ({degraded / total * 100}%) Degraded");
+            if (false) {
+                using (var sw = new StreamWriter("E:\\Desktop\\simdlookup.log", true, Encoding.UTF8))
+                    sw.WriteLine($"{overflowed} ({overflowed / total * 100}%) Overflowed; {degraded} ({degraded / total * 100}%) Degraded");
+            }
         }
 
         protected override bool TryGetValue (long key, out long value) =>
@@ -86,40 +88,40 @@ namespace Benchmarks {
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     [MemoryDiagnoser()]
-    public class SimdRemoval : Removal<VectorizedDictionary<TKey, TValue>> { 
+    public class RemovalSimd : Removal<VectorizedDictionary<TKey, TValue>> { 
     }
 
-    public class SimdClearing : Clearing<VectorizedDictionary<TKey, TValue>> { 
-    }
-
-    [MemoryDiagnoser()]
-    public class SimdResize : Resize<VectorizedDictionary<TKey, TValue>> {
+    public class ClearingSimd : Clearing<VectorizedDictionary<TKey, TValue>> { 
     }
 
     [MemoryDiagnoser()]
-    public class SimdCollisions : Collisions<VectorizedDictionary<Collider, Collider>, Collider> {
+    public class ResizeSimd : Resize<VectorizedDictionary<TKey, TValue>> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdTailCollisions : Collisions<VectorizedDictionary<TailCollider, TailCollider>, TailCollider> {
+    public class CollisionsSimd : Collisions<VectorizedDictionary<Collider, Collider>, Collider> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdHeadCollisions : Collisions<VectorizedDictionary<HeadCollider, HeadCollider>, HeadCollider> {
+    public class TailCollisionsSimd : Collisions<VectorizedDictionary<TailCollider, TailCollider>, TailCollider> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdIterate : Iterate<VectorizedDictionary<TKey, TValue>> {
+    public class HeadCollisionsSimd : Collisions<VectorizedDictionary<HeadCollider, HeadCollider>, HeadCollider> {
+    }
+
+    [MemoryDiagnoser()]
+    public class IterateSimd : Iterate<VectorizedDictionary<TKey, TValue>> {
         protected override IEnumerable<TKey> GetKeys () => ((IDictionary<TKey, TValue>)Dict).Keys;
         protected override IEnumerable<TValue> GetValues () => ((IDictionary<TKey, TValue>)Dict).Values;
     }
 
     [MemoryDiagnoser()]
-    public class BCLMemoryUsage : MemoryUsage<Dictionary<TKey, TValue>> {
+    public class MemoryUsageBCL : MemoryUsage<Dictionary<TKey, TValue>> {
     }
 
     [MemoryDiagnoser()]
-    public class SimdMemoryUsage : MemoryUsage<VectorizedDictionary<TKey, TValue>> {
+    public class MemoryUsageSimd : MemoryUsage<VectorizedDictionary<TKey, TValue>> {
     }
 
     public class ClearingWithRefs {
