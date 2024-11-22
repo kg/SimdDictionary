@@ -59,17 +59,19 @@ namespace SimdDictionary {
                 var hashCode = FinalizeHashCode(unchecked((uint)comparer.GetHashCode(key)));
                 var suffix = GetHashSuffix(hashCode);
                 var searchVector = Vector128.Create(suffix);
-                var enumerator = new LoopingBucketEnumerator(dictionary, hashCode);
+                ref var bucket = ref dictionary.NewEnumerator(hashCode, out var enumerator);
                 do {
-                    int bucketCount = enumerator.bucket.Count,
-                        startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                    ref var pair = ref FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
+                    int bucketCount = bucket.Count,
+                        startIndex = FindSuffixInBucket(ref bucket, searchVector, bucketCount);
+                    ref var pair = ref FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
                     if (Unsafe.IsNullRef(ref pair)) {
-                        if (enumerator.bucket.CascadeCount == 0)
+                        if (bucket.CascadeCount == 0)
                             return ref Unsafe.NullRef<Pair>();
                     } else
                         return ref pair;
-                } while (enumerator.Advance(dictionary));
+
+                    bucket = ref enumerator.Advance();
+                } while (!Unsafe.IsNullRef(ref bucket));
 
                 return ref Unsafe.NullRef<Pair>();
             }

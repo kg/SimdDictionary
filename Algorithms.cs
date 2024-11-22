@@ -18,73 +18,55 @@ namespace SimdDictionary {
         // Extracting all this logic into each caller improves codegen slightly + reduces code size slightly, but the
         //  duplication reduces maintainability, so I'm pretty happy doing this instead.
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
+
+        // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ref Bucket NewEnumerator (uint hashCode, out LoopingBucketEnumerator result) {
+            Unsafe.SkipInit(out result);
+            var buckets = new Span<Bucket>(_Buckets);
+            var initialIndex = BucketIndexForHashCode(hashCode, buckets);
+            Debug.Assert(buckets.Length > 0);
+
+            // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
+            // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
+            Debug.Assert(initialIndex < buckets.Length);
+            ref var initialBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialIndex);
+            result.buckets = buckets;
+            result.index = result.initialIndex = initialIndex;
+            return ref initialBucket;
+        }
+
         private ref struct LoopingBucketEnumerator {
             // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
             // The current size is small enough for TryGetValue to have a register to spare, and for TryInsert to barely avoid touching stack.
-            public ref Bucket bucket, lastBucket;
-            public ref Bucket initialBucket;
-
-            // Will never fail as long as buckets isn't 0-length. You don't need to call Advance before your first loop iteration.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public LoopingBucketEnumerator (VectorizedDictionary<K, V> self, uint hashCode) {
-                var buckets = new Span<Bucket>(self._Buckets);
-                var initialBucketIndex = self.BucketIndexForHashCode(hashCode, buckets);
-                Debug.Assert(buckets.Length > 0);
-
-                // The start of the array. We need to stash this so we can loop later, and we're using it below too.
-                ref var firstBucket = ref MemoryMarshal.GetReference(buckets);
-                lastBucket = ref Unsafe.Add(ref firstBucket, buckets.Length - 1);
-
-                // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
-                // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
-                Debug.Assert(initialBucketIndex < buckets.Length);
-                bucket = ref Unsafe.Add(ref firstBucket, initialBucketIndex);
-                initialBucket = ref bucket;
-            }
-
-            // HACK: Outlining this method doesn't reduce code size, so just inline it.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public ref Bucket GetFirstBucket (VectorizedDictionary<K, V> self) {
-                // In the common case (given an optimal hash) we won't actually need the address of the first bucket,
-                //  so we no longer store it in the enumerator. Instead, we compute it on-demand by re-loading the field.
-                // This is fairly cheap in practice since our this-reference has to stay around anyway.
-                var buckets = self._Buckets;
-                ref var bucket = ref MemoryMarshal.GetArrayDataReference(buckets);
-                // We re-loaded Buckets, so it may be a different array than it was when we started.
-                // If this is the case, it's impossible to continue since we will never reach initialBucket.
-                if (!Unsafe.AreSame(ref Unsafe.Add(ref bucket, buckets.Length - 1), ref lastBucket))
-                    ThrowConcurrentModification();
-                return ref bucket;
-            }
+            internal Span<Bucket> buckets;
+            internal int index, initialIndex;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Advance (VectorizedDictionary<K, V> self) {
-                if (Unsafe.AreSame(ref bucket, ref lastBucket))
-                    // Rare case: Wrap around from last bucket to first bucket.
-                    bucket = ref GetFirstBucket(self);
+            public ref Bucket Advance () {
+                if (++index >= buckets.Length)
+                    index = 0;
+
+                if (index == initialIndex)
+                    return ref Unsafe.NullRef<Bucket>();
                 else
-                    bucket = ref Unsafe.Add(ref bucket, 1);
-
-                if (Unsafe.AreSame(ref bucket, ref initialBucket))
-                    return false;
-                else
-                    return true;
+                    return ref buckets[index];
             }
 
             // Will attempt to walk backwards through the buckets you previously visited.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Retreat (ref Bucket firstBucket) {
-                // We can't retreat when standing on our initial bucket.
-                if (Unsafe.AreSame(ref bucket, ref initialBucket))
-                    return false;
+            public ref Bucket Retreat () {
+                if (index == initialIndex)
+                    return ref Unsafe.NullRef<Bucket>();
 
-                if (Unsafe.AreSame(ref bucket, ref firstBucket))
-                    bucket = ref lastBucket;
-                else
-                    bucket = ref Unsafe.Subtract(ref bucket, 1);
+                if (--index < 0)
+                    index = buckets.Length - 1;
+                return ref buckets[index];
+            }
 
-                // It's okay if we're standing on our initial bucket right now.
-                return true;
+            public bool HasMoved {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => index != initialIndex;
             }
         }
 
@@ -217,30 +199,30 @@ namespace SimdDictionary {
             LoopingBucketEnumerator enumerator, bool increase
         ) {
             // Early-out before doing setup work since in the common case we won't have cascaded out of a bucket at all
-            if (Unsafe.AreSame(ref enumerator.bucket, ref enumerator.initialBucket))
+            if (!enumerator.HasMoved)
                 return;
-
-            // We need the first bucket since it's the wrap point for a retreat, instead of lastBucket (which we have already)
-            ref var firstBucket = ref enumerator.GetFirstBucket(this);
 
             // We may have cascaded out of a previous bucket; if so, scan backwards and update
             //  the cascade count for every bucket we previously scanned.
-            while (enumerator.Retreat(ref firstBucket)) {
+            ref Bucket bucket = ref enumerator.Retreat();
+            while (!Unsafe.IsNullRef(ref bucket)) {
                 // FIXME: Track number of times we cascade out of a bucket for string rehashing anti-DoS mitigation!
-                var cascadeCount = enumerator.bucket.CascadeCount;
+                var cascadeCount = bucket.CascadeCount;
                 if (increase) {
                     // Never overflow (wrap around) the counter
-                    if (cascadeCount < 255)
-                        enumerator.bucket.CascadeCount = (byte)(cascadeCount + 1);
+                    if (cascadeCount < DegradedCascadeCount)
+                        bucket.CascadeCount = (ushort)(cascadeCount + 1);
                 } else {
                     if (cascadeCount == 0)
                         ThrowCorrupted();
-                    // If the cascade counter hit 255, it's possible the actual cascade count through here is >255,
+                    // If the cascade counter hit the maximum, it's possible the actual cascade count through here is higher,
                     //  so it's no longer safe to decrement. This is a very rare scenario, but it permanently degrades the table.
-                    // TODO: Track this and triggering a rehash once too many buckets are in this state + dict is mostly empty.
-                    else if (cascadeCount < 255)
-                        enumerator.bucket.CascadeCount = (byte)(cascadeCount - 1);
+                    // TODO: Track this and trigger a rehash once too many buckets are in this state + dict is mostly empty.
+                    else if (cascadeCount < DegradedCascadeCount)
+                        bucket.CascadeCount = (ushort)(cascadeCount - 1);
                 }
+
+                bucket = ref enumerator.Retreat();
             }
         }
 

@@ -14,6 +14,10 @@ public static class DisasmHarness
     public static D Dict = new(1);
     public static K MissingKey = (typeof(K) == typeof(string)) ? (K)(object)"0" : (K)(object)0L,
         PresentKey = (typeof(K) == typeof(string)) ? (K)(object)"1" : (K)(object)1L;
+    public static VectorizedDictionary<int, Guid> GuidDict = new() {
+        { 0, Guid.NewGuid() },
+        { 1, Guid.NewGuid() },
+    };
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryFindValue (D dict, int i, K missingKey, K presentKey) =>
@@ -22,6 +26,12 @@ public static class DisasmHarness
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryGetValue (D dict, int i, K missingKey, K presentKey) =>
         dict.TryGetValue((i % 2) == 0 ? missingKey : presentKey, out var result);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool TryGetGuid (VectorizedDictionary<int, Guid> dict, int i) {
+        dict.TryGetValue(i, out var result);
+        return result != Guid.Empty;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryAdd (D dict, K presentKey) =>

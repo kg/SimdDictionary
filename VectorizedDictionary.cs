@@ -223,18 +223,19 @@ namespace SimdDictionary {
             //  anyway. On some architectures create's latency is very low but on others it isn't, so on average it is better
             //  to put it outside of the loop.
             var searchVector = Vector128.Create(suffix);
-            var enumerator = new LoopingBucketEnumerator(this, hashCode);
+            ref var bucket = ref NewEnumerator(hashCode, out var enumerator);
             do {
                 // Eagerly load the bucket count early for pipelining purposes, so we don't stall when using it later.
-                int bucketCount = enumerator.bucket.Count, 
-                    startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
+                int bucketCount = bucket.Count, 
+                    startIndex = FindSuffixInBucket(ref bucket, searchVector, bucketCount);
+                ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
                 if (Unsafe.IsNullRef(ref pair)) {
-                    if (enumerator.bucket.CascadeCount == 0)
+                    if (bucket.CascadeCount == 0)
                         return ref Unsafe.NullRef<Pair>();
                 } else
                     return ref pair;
-            } while (enumerator.Advance(this));
+                bucket = ref enumerator.Advance();
+            } while (!Unsafe.IsNullRef(ref bucket));
 
             return ref Unsafe.NullRef<Pair>();
         }
@@ -279,12 +280,12 @@ namespace SimdDictionary {
                 return ref Unsafe.NullRef<Pair>();
             }
 
-            var enumerator = new LoopingBucketEnumerator(this, hashCode);
+            ref var bucket = ref NewEnumerator(hashCode, out var enumerator);
             do {
-                int bucketCount = enumerator.bucket.Count;
+                int bucketCount = bucket.Count;
                 if (mode != InsertMode.Rehashing) {
-                    int startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                    ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out _);
+                    int startIndex = FindSuffixInBucket(ref bucket, searchVector, bucketCount);
+                    ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out _);
 
                     if (!Unsafe.IsNullRef(ref pair)) {
                         if (mode == InsertMode.EnsureUnique) {
@@ -300,7 +301,7 @@ namespace SimdDictionary {
                     }
                 }
 
-                ref var insertLocation = ref TryInsertIntoBucket(ref enumerator.bucket, suffix, bucketCount, key, value);
+                ref var insertLocation = ref TryInsertIntoBucket(ref bucket, suffix, bucketCount, key, value);
                 if (!Unsafe.IsNullRef(ref insertLocation)) {
                     // Increase the cascade counters for the buckets we checked before this one.
                     AdjustCascadeCounts(enumerator, true);
@@ -308,7 +309,9 @@ namespace SimdDictionary {
                     result = InsertResult.OkAddedNew;
                     return ref insertLocation;
                 }
-            } while (enumerator.Advance(this));
+
+                bucket = ref enumerator.Advance();
+            } while (!Unsafe.IsNullRef(ref bucket));
 
             result = InsertResult.CorruptedInternalState;
             return ref Unsafe.NullRef<Pair>();
@@ -357,15 +360,15 @@ namespace SimdDictionary {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
-            var enumerator = new LoopingBucketEnumerator(this, hashCode);
+            ref var bucket = ref NewEnumerator(hashCode, out var enumerator);
             do {
-                int bucketCount = enumerator.bucket.Count,
-                    startIndex = FindSuffixInBucket(ref enumerator.bucket, searchVector, bucketCount);
-                ref var pair = ref TKeySearcher.FindKeyInBucket(ref enumerator.bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
+                int bucketCount = bucket.Count,
+                    startIndex = FindSuffixInBucket(ref bucket, searchVector, bucketCount);
+                ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref pair)) {
                     _Count--;
-                    RemoveFromBucket(ref enumerator.bucket, indexInBucket, bucketCount, ref pair);
+                    RemoveFromBucket(ref bucket, indexInBucket, bucketCount, ref pair);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
                     AdjustCascadeCounts(enumerator, false);
                     return true;
@@ -373,9 +376,11 @@ namespace SimdDictionary {
 
                 // Important: If the cascade counter is 0 and we didn't find the item, we don't want to check any other buckets.
                 // Otherwise, we'd scan the whole table fruitlessly looking for a matching key.
-                if (enumerator.bucket.CascadeCount == 0)
+                if (bucket.CascadeCount == 0)
                     return false;
-            } while (enumerator.Advance(this));
+
+                bucket = ref enumerator.Advance();
+            } while (!Unsafe.IsNullRef(ref bucket));
 
             return false;
         }
@@ -720,7 +725,7 @@ retry:
             public int Normal, Overflowed, Degraded;
 
             public bool Bucket (ref Bucket bucket) {
-                if (bucket.CascadeCount >= 255)
+                if (bucket.CascadeCount >= DegradedCascadeCount)
                     Degraded++;
                 else if (bucket.CascadeCount == 0)
                     Normal++;

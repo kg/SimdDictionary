@@ -21,9 +21,11 @@ namespace SimdDictionary {
             // 140% -> 4.57% overflowed buckets
             // 120 is a compromise value, since 110 was "good enough" for the benchmark but we don't want to overtune for it
             OversizePercentage = 20,
-            BucketSizeI = 14,
-            CountSlot = 14,
-            CascadeSlot = 15;
+            BucketSizeI = 13,
+            CountSlot = 13,
+            // NOTE: The cascade counter must be in 14, not 13, so that the 16-bit read is aligned
+            CascadeSlot = 14,
+            DegradedCascadeCount = 0xFFFF;
 
         public delegate bool ForEachCallback (int index, in K key, ref V value);
 
@@ -54,9 +56,9 @@ namespace SimdDictionary {
                 get => ref Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), CountSlot);
             }
 
-            public ref byte CascadeCount {
+            public ref ushort CascadeCount {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => ref Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, byte>(ref Unsafe.AsRef(in Suffixes)), CascadeSlot);
+                get => ref Unsafe.AddByteOffset(ref Unsafe.As<Vector128<byte>, ushort>(ref Unsafe.AsRef(in Suffixes)), CascadeSlot);
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
