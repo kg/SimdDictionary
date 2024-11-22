@@ -94,10 +94,11 @@ namespace SimdDictionary {
         }
 
         private void Resize (int capacity) {
-            int bucketCount, actualCapacity;
+            int bucketCount;
             ulong fastModMultiplier;
 
             checked {
+                capacity = (int)((long)capacity * OversizePercentage / 100);
                 if (capacity < 1)
                     capacity = 1;
 
@@ -105,13 +106,16 @@ namespace SimdDictionary {
 
                 bucketCount = bucketCount > 1 ? HashHelpers.GetPrime(bucketCount) : 1;
                 fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
-                actualCapacity = bucketCount * BucketSizeI;
+            }
+
+            var actualCapacity = bucketCount * BucketSizeI;
+            var oldBuckets = _Buckets;
+            checked {
+                actualCapacity = (int)(((long)actualCapacity) * 100 / OversizePercentage);
             }
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
-
-            var oldBuckets = _Buckets;
             _Buckets = newBuckets;
             // HACK: Ensure we store a new larger bucket array before storing the larger fastModMultiplier and capacity.
             // This ensures that concurrent modification will not produce a bucket index that is too big.
