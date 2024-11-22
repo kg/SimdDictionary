@@ -27,23 +27,24 @@ namespace SimdDictionary {
             var initialIndex = BucketIndexForHashCode(hashCode, buckets);
             Debug.Assert(buckets.Length > 0);
 
-            // This is calculated by BucketIndexForHashCode (either masked with & or modulus), so it's never out of range
-            // FIXME: For concurrent modification safety, do a Math.Min here and rely on the branch to predict 100% reliably?
-            Debug.Assert(initialIndex < buckets.Length);
-            ref var initialBucket = ref Unsafe.Add(ref MemoryMarshal.GetReference(buckets), initialIndex);
+            // This is calculated by BucketIndexForHashCode, so it won't be out of range, but it's possible FastMod is broken if
+            //  you concurrently resize the container, so have span bounds-check it for us.
+            ref var initialBucket = ref buckets[initialIndex];
             result.buckets = buckets;
             result.index = result.initialIndex = initialIndex;
             return ref initialBucket;
         }
 
         private ref struct LoopingBucketEnumerator {
-            // The size of this struct is REALLY important! Adding even a single field to this will cause stack spills in critical loops.
-            // The current size is small enough for TryGetValue to have a register to spare, and for TryInsert to barely avoid touching stack.
+            // The size of this struct is REALLY important! Adding even a single field to this will add stack spills to critical loops.
+            // FIXME: This span being a field puts pressure on the JIT to do recursive struct decomposition; I'm not sure it always does
             internal Span<Bucket> buckets;
             internal int index, initialIndex;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ref Bucket Advance () {
+                // Operating on the index field directly is harmless as long as the enumerator struct got decomposed, which it seems to
+                // Caching index into a local and then doing a writeback at the end increases generated code size so it's not worth it
                 if (++index >= buckets.Length)
                     index = 0;
 
