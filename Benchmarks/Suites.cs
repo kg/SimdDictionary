@@ -266,66 +266,58 @@ namespace Benchmarks {
 
         const int Size = 10240;
 
+        public HashSet<int> Keys = new HashSet<int>(Size);
         public Dictionary<int, BigStruct> BCL = new (Size);
         public VectorizedDictionary<int, BigStruct> SIMD = new (Size);
 
         [GlobalSetup]
         public void Setup () {
+            var rng = new Random(1);
             for (int i = 0; i < Size; i++) {
-                var value = new BigStruct(i);
-                BCL.Add(i, value);
-                SIMD.Add(i, value);
+                var key = rng.Next();
+                while (Keys.Contains(key))
+                    key = rng.Next();
+
+                var value = new BigStruct(key);
+                BCL.Add(key, value);
+                SIMD.Add(key, value);
             }
         }
 
         [Benchmark]
         public void FindExistingSIMDValueRef () {
-            for (int i = 0; i < Size; i++) {
-                ref readonly var value = ref SIMD.GetValueRefOrNullRef(i);
+            foreach (var key in Keys) {
+                ref readonly var value = ref SIMD.GetValueRefOrNullRef(key);
                 if (Unsafe.IsNullRef(in value))
                     throw new Exception("Key not found");
                 // This is extremely expensive unless InputMatches is a readonly method
-                if (!value.InputMatches(i))
+                if (!value.InputMatches(key))
                     throw new Exception("Result mismatch");
             }
         }
 
         [Benchmark]
         public void FindExistingSIMD () {
-            for (int i = 0; i < Size; i++) {
-                if (!SIMD.TryGetValue(i, out var value))
+            foreach (var key in Keys) {
+                if (!SIMD.TryGetValue(key, out var value))
                     throw new Exception("Key not found");
-                if (!value.InputMatches(i))
+                if (!value.InputMatches(key))
                     throw new Exception("Result mismatch");
             }
         }
 
         [Benchmark]
         public void FindExistingBCL () {
-            for (int i = 0; i < Size; i++) {
-                if (!BCL.TryGetValue(i, out var result))
+            foreach (var key in Keys) {
+                if (!BCL.TryGetValue(key, out var result))
                     throw new Exception("Key not found");
-                if (!result.InputMatches(i))
+                if (!result.InputMatches(key))
                     throw new Exception("Result mismatch");
             }
         }
 
-        [Benchmark]
-        public void FindMissingSIMD () {
-            for (int i = 1; i < Size; i++) {
-                ref readonly var value = ref SIMD.GetValueRefOrNullRef(-i);
-                if (!Unsafe.IsNullRef(in value))
-                    throw new Exception("Key found");
-            }
-        }
-
-        [Benchmark]
-        public void FindMissingBCL () {
-            for (int i = 1; i < Size; i++) {
-                if (BCL.TryGetValue(-i, out var result))
-                    throw new Exception("Key found");
-            }
-        }
+        // FindMissing is annoying to write with random keys and we know from other tests that SIMD is faster
+        //  for missing keys by a significant amount, so it's omitted now
     }
 
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]

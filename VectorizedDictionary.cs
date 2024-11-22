@@ -212,8 +212,8 @@ namespace SimdDictionary {
         }
 
         // Performance is much worse unless this method is inlined, I'm not sure why.
-        // If we disable inlining for it, our generated code size is roughly halved.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // If we disable inlining for it, our generated code size is dramatically reduced.
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
