@@ -71,7 +71,7 @@ namespace Benchmarks {
             // Validate that pre-sized dictionaries don't grow
             var capTest = new VectorizedDictionary<TKey, TValue>(VectorizedDictionary<TKey, TValue>.BucketSizeI);
             // FIXME: This value below needs to change based on the default load factor of the dictionary!
-            int expectedCapacity = 35; // Not 14 due to load factor and prime bucket counts
+            int expectedCapacity = 34; // Not 14 due to load factor and prime bucket counts
             if (capTest.Capacity != expectedCapacity)
                 throw new Exception($"Pre-sized dict capacity is wrong: {capTest.Capacity} != {expectedCapacity}");
 

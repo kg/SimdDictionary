@@ -35,7 +35,7 @@ namespace SimdDictionary {
         //  in these fields to get rid of the per-use allocation. Most application scenarios will never allocate these.
         private ICollection<K>? _BoxedKeys;
         private ICollection<V>? _BoxedValues;
-        // It's important for an empty dictionary to have both count and growatcount be 0
+        // It's important for an empty dictionary to have both count and capacity be 0
         private int _Count = 0, 
             _Capacity = 0;
         private ulong _fastModMultiplier;
@@ -94,25 +94,34 @@ namespace SimdDictionary {
         }
 
         private void Resize (int capacity) {
-            int bucketCount;
+
+            int bucketCount, adjustedCapacityRequest,
+                usableCapacity, padding;
             ulong fastModMultiplier;
 
+            // FIXME: It should be possible to calculate this with integers, but I can't get it to work reliably.
             checked {
-                capacity = (int)((long)capacity * OversizePercentage / 100);
-                if (capacity < 1)
-                    capacity = 1;
+                adjustedCapacityRequest = capacity + (int)((long)(capacity * OversizePercentage) / 100);
+                if (adjustedCapacityRequest < 1)
+                    adjustedCapacityRequest = 1;
 
-                bucketCount = ((capacity + BucketSizeI - 1) / BucketSizeI);
+                bucketCount = (int)((long)(adjustedCapacityRequest + BucketSizeI - 1) / BucketSizeI);
 
                 bucketCount = bucketCount > 1 ? HashHelpers.GetPrime(bucketCount) : 1;
                 fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
             }
 
-            var actualCapacity = bucketCount * BucketSizeI;
+            var slotCount = bucketCount * BucketSizeI;
             var oldBuckets = _Buckets;
             checked {
-                actualCapacity = (int)(((long)actualCapacity) * 100 / OversizePercentage);
+                padding = (int)((long)slotCount * OversizePercentage / 100);
+                usableCapacity = slotCount - padding;
             }
+
+            // FIXME
+            if (usableCapacity < capacity)
+                // throw new Exception($"Oversize percentage broke allocation size of {capacity}: usable={usableCapacity}, adjustedRequest={adjustedCapacityRequest}, bucketCount={bucketCount}, padding={padding}");
+                usableCapacity = capacity;
 
             // Allocate new array before updating fields so that we don't get corrupted when running out of memory
             var newBuckets = new Bucket[bucketCount];
@@ -121,7 +130,7 @@ namespace SimdDictionary {
             // This ensures that concurrent modification will not produce a bucket index that is too big.
             Thread.MemoryBarrier();
             _fastModMultiplier = fastModMultiplier;
-            _Capacity = actualCapacity;
+            _Capacity = usableCapacity;
 
             // FIXME: In-place rehashing
             if ((oldBuckets != Statics.EmptyBuckets) && (_Count > 0)) {

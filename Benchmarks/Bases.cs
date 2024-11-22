@@ -404,12 +404,14 @@ namespace Benchmarks {
                 sizeArray[0] = i;
                 var instance = (T)Ctor.Invoke(sizeArray);
 
-                var capacityBefore = pCapacity.GetValue(instance);
+                var capacityBefore = (int)pCapacity.GetValue(instance)!;
+                if (capacityBefore < i)
+                    throw new Exception($"Container was too small: {capacityBefore} < {i}");
                 for (int j = 0; j < i; j++)
                     instance.Add(j, j);
-                var capacityAfter = pCapacity.GetValue(instance);
-                if (!capacityAfter!.Equals(capacityBefore))
-                    throw new Exception("Capacity changed after filling!");
+                var capacityAfter = (int)pCapacity.GetValue(instance)!;
+                if (!capacityAfter.Equals(capacityBefore))
+                    throw new Exception($"Capacity changed after filling! {capacityBefore} -> {capacityAfter}");
             }
         }
     }

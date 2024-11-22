@@ -20,7 +20,7 @@ namespace SimdDictionary {
             // 110/120/130% -> 18% overflowed buckets
             // 140% -> 4.57% overflowed buckets
             // 120 is a compromise value, since 110 was "good enough" for the benchmark but we don't want to overtune for it
-            OversizePercentage = 120,
+            OversizePercentage = 20,
             BucketSizeI = 14,
             CountSlot = 14,
             CascadeSlot = 15;
