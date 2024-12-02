@@ -242,7 +242,7 @@ namespace Benchmarks {
     [DisassemblyDiagnoser(16, BenchmarkDotNet.Diagnosers.DisassemblySyntax.Intel, true, false, false, true, true, false)]
     public class BigStructLookup {
         public unsafe struct BigStruct {
-            // Note that if InnerSize is too big, Bucket will hit an internal limitation in the CLR, since it has to contain 14* K/V pairs.
+            // Note that if InnerSize is too big, Bucket will hit an internal limitation in the CLR, since it has to contain 13* K/V pairs.
             // Array of type 'Bucket[...]' from assembly 'SimdDictionary, ...' cannot be created because base value type is too large.
             public const int InnerSize = 256;
 

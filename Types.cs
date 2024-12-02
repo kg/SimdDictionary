@@ -38,7 +38,7 @@ namespace SimdDictionary {
         
         // This size must match or exceed BucketSizeI
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        [InlineArray(14)]
+        [InlineArray(13)]
         private struct InlinePairArray {
             public Pair Pair0;
         }
