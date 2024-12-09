@@ -17,17 +17,6 @@ namespace Benchmarks {
     public class Program {
         private unsafe static TKey NextKey (Random rng) {
             return rng.NextInt64();
-            /*
-            Span<char> chars = stackalloc char[12];
-            int c = rng.Next(2, chars.Length);
-            for (int i = 0; i < c; i++)
-                chars[i] = (char)rng.Next(32, 127);
-
-            var result = new String(chars.Slice(0, c));
-            // Pre-compute hash
-            result.GetHashCode();
-            return result;
-            */
         }
 
         private unsafe static TValue NextValue (Random rng) =>
@@ -47,6 +36,7 @@ namespace Benchmarks {
                 unusedKeys = new(c);
             List<TValue> values = new (c);
 
+            Console.WriteLine("TailCollider...");
             List<TailCollider> tcs = new();
             var tcTest = new VectorizedDictionary<TailCollider, int>();
             for (int i = 0; i < f; i++) {
@@ -68,6 +58,7 @@ namespace Benchmarks {
                     throw new Exception();
             }
 
+            Console.WriteLine("Int64 init...");
             // Validate that pre-sized dictionaries don't grow
             var capTest = new VectorizedDictionary<TKey, TValue>(VectorizedDictionary<TKey, TValue>.BucketSizeI);
             // FIXME: This value below needs to change based on the default load factor of the dictionary!
@@ -101,6 +92,7 @@ namespace Benchmarks {
             for (int i = 0; i < c; i++)
                 test.Add(keys[i], values[i]);
 
+            Console.WriteLine("Int64 integrity check...");
             // Integrity check
             var expectedKeySet = keys.OrderBy(k => k).ToList();
             var enumeratedKeySet = test.Keys.OrderBy(k => k).ToList();
@@ -122,6 +114,7 @@ namespace Benchmarks {
             var keyList = test.Keys.ToArray();
             var valueList = test.Values.ToArray();
 
+            Console.WriteLine("Int64 cloning and mutation...");
             var copy = new VectorizedDictionary<TKey, TValue>(test);
             for (int j = 0; j < e; j++)
             {
@@ -157,6 +150,9 @@ namespace Benchmarks {
                 if (copy.Count != c)
                     throw new Exception();
             }
+
+            Console.Clear();
+            Console.WriteLine("Integrity check done.");
 
             // Run benchmark suite
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)

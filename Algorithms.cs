@@ -119,10 +119,17 @@ namespace SimdDictionary {
 
             while (true) {
                 ref var pair = ref bucket.Pairs.Pair0;
-                for (int i = 0, c = bucket.Count; i < c; i++) {
+
+                // FIXME: Awkward construction to prevent pair from ever becoming an invalid reference for a full bucket
+                int i = 0, c = bucket.Count;
+                if (i < c) {
+iteration:
                     if (!callback.Pair(ref pair))
                         return;
-                    pair = ref Unsafe.Add(ref pair, 1);
+                    if (++i < c) {
+                        pair = ref Unsafe.Add(ref pair, 1);
+                        goto iteration;
+                    }
                 }
 
                 if (!Unsafe.AreSame(ref bucket, ref lastBucket))

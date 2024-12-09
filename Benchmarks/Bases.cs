@@ -4,6 +4,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
+// String keys would be more realistic but they're inconvenient to test with because SCG does special
+//  private optimizations for string comparers that we can't compete with
 using TKey = System.Int64;
 using TValue = System.Int64;
 
@@ -28,21 +30,6 @@ namespace Benchmarks {
 
         private unsafe TKey NextKey (Random rng) =>
             rng.NextInt64();
-
-        // Right now it's impossible to compete with SCG because its optimized string comparer is private.
-        // As a result there's no point in doing comparison measurements with string keys.
-        /*
-            Span<char> chars = stackalloc char[12];
-            int c = rng.Next(2, chars.Length);
-            for (int i = 0; i < c; i++)
-                chars[i] = (char)rng.Next(32, 127);
-
-            var result = new String(chars.Slice(0, c));
-            // Pre-compute hash
-            result.GetHashCode();
-            return result;
-        }
-        */
 
         private unsafe TValue NextValue (Random rng) =>
             rng.NextInt64();

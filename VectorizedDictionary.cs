@@ -314,6 +314,7 @@ namespace SimdDictionary {
                             return ref pair;
                         }
                     } else if (startIndex < BucketSizeI) {
+                        ;
                         // FIXME: Suffix collision. Track these for string rehashing anti-DoS mitigation!
                     }
                 }
