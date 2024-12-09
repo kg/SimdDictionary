@@ -6,11 +6,12 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Serialization;
 
 namespace SimdDictionary {
     public partial class VectorizedDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
-        ICollection<KeyValuePair<K, V>>, ICloneable
+        ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable
         where K : notnull
     {
         private static class Statics {
@@ -94,12 +95,16 @@ namespace SimdDictionary {
         }
 
         private void Resize (int capacity) {
+            if (capacity < Count)
+                ThrowInvalidOperation();
 
+
+            var oldBuckets = _Buckets;
             int bucketCount, adjustedCapacityRequest,
                 usableCapacity, padding;
             ulong fastModMultiplier;
 
-            // FIXME: It should be possible to calculate this with integers, but I can't get it to work reliably.
+            // FIXME: It should be possible to calculate this with ints, but I can't get it to work reliably.
             checked {
                 adjustedCapacityRequest = capacity + (int)((long)(capacity * OversizePercentage) / 100);
                 if (adjustedCapacityRequest < 1)
@@ -108,17 +113,20 @@ namespace SimdDictionary {
                 bucketCount = (int)((long)(adjustedCapacityRequest + BucketSizeI - 1) / BucketSizeI);
 
                 bucketCount = bucketCount > 1 ? HashHelpers.GetPrime(bucketCount) : 1;
+                // Nothing to do if the bucket count hasn't changed.
+                if ((oldBuckets != Statics.EmptyBuckets) && (bucketCount == oldBuckets.Length))
+                    return;
                 fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)bucketCount);
             }
 
             var slotCount = bucketCount * BucketSizeI;
-            var oldBuckets = _Buckets;
             checked {
                 padding = (int)((long)slotCount * OversizePercentage / 100);
                 usableCapacity = slotCount - padding;
             }
 
-            // FIXME
+            // FIXME: I don't know what I did wrong to cause this to happen, but it does. I've tried a few different ways
+            //  of calculating the oversize factor and all of them have this problem.
             if (usableCapacity < capacity)
                 // throw new Exception($"Oversize percentage broke allocation size of {capacity}: usable={usableCapacity}, adjustedRequest={adjustedCapacityRequest}, bucketCount={bucketCount}, padding={padding}");
                 usableCapacity = capacity;
@@ -138,6 +146,15 @@ namespace SimdDictionary {
                 EnumeratePairs(oldBuckets, ref c);
             }
         }
+
+        public void TrimExcess () {
+            Resize(_Count);
+        }
+
+        // FIXME: What does this actually do? The docs don't make it clear. Is it just Resize(capacity) and it throws if
+        //  you have too many items to fit?
+        public void TrimExcess (int capacity) =>
+            throw new NotImplementedException();
 
         private readonly struct RehashCallback : IPairCallback {
             public readonly VectorizedDictionary<K, V> Self;
@@ -322,9 +339,18 @@ namespace SimdDictionary {
         public bool Remove (K key) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
-                return TryRemove<DefaultComparerKeySearcher>(key, null);
+                return TryRemove<DefaultComparerKeySearcher>(key, null, out _);
             else
-                return TryRemove<ComparerKeySearcher>(key, comparer);
+                return TryRemove<ComparerKeySearcher>(key, comparer, out _);
+        }
+
+        // Inlining required for disasmo
+        public bool Remove (K key, out V value) {
+            var comparer = Comparer;
+            if (typeof(K).IsValueType && (comparer == null))
+                return TryRemove<DefaultComparerKeySearcher>(key, null, out value);
+            else
+                return TryRemove<ComparerKeySearcher>(key, comparer, out value);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -354,7 +380,7 @@ namespace SimdDictionary {
 
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        private bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer, out V value)
             where TKeySearcher : struct, IKeySearcher
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
@@ -367,6 +393,7 @@ namespace SimdDictionary {
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref pair)) {
+                    value = pair.Value;
                     _Count--;
                     RemoveFromBucket(ref bucket, indexInBucket, bucketCount, ref pair);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
@@ -376,12 +403,15 @@ namespace SimdDictionary {
 
                 // Important: If the cascade counter is 0 and we didn't find the item, we don't want to check any other buckets.
                 // Otherwise, we'd scan the whole table fruitlessly looking for a matching key.
-                if (bucket.CascadeCount == 0)
+                if (bucket.CascadeCount == 0) {
+                    value = default!;
                     return false;
+                }
 
                 bucket = ref enumerator.Advance();
             } while (!Unsafe.IsNullRef(ref bucket));
 
+            value = default!;
             return false;
         }
 
@@ -768,6 +798,15 @@ retry:
                 throw new ArgumentException("Unsupported destination array type", nameof(array));
         }
 
+        public AlternateLookup<TAlternateKey> GetAlternateLookup<TAlternateKey> ()
+            where TAlternateKey : notnull, allows ref struct 
+        {
+            if (!TryGetAlternateLookup<TAlternateKey>(out var result))
+                ThrowInvalidOperation();
+
+            return result;
+        }
+
         public bool TryGetAlternateLookup<TAlternateKey> (out AlternateLookup<TAlternateKey> result)
             where TAlternateKey : notnull, allows ref struct 
         {
@@ -802,6 +841,14 @@ retry:
         [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
         internal static void ThrowKeyNotFound () {
             throw new KeyNotFoundException();
+        }
+
+        public virtual void GetObjectData (SerializationInfo info, StreamingContext context) {
+            throw new NotImplementedException();
+        }
+
+        public virtual void OnDeserialization (object? sender) {
+            throw new NotImplementedException();
         }
     }
 }

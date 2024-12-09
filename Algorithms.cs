@@ -41,6 +41,15 @@ namespace SimdDictionary {
             internal Span<Bucket> buckets;
             internal int index, initialIndex;
 
+            [Obsolete("Use VectorizedDictionary.NewEnumerator")]
+            public LoopingBucketEnumerator () {
+            }
+
+            /// <summary>
+            /// Walks forward through buckets, wrapping around at the end of the container.
+            /// Never visits a bucket twice.
+            /// </summary>
+            /// <returns>The next bucket, or NullRef if you have visited every bucket exactly once.</returns>
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ref Bucket Advance () {
                 // Operating on the index field directly is harmless as long as the enumerator struct got decomposed, which it seems to
@@ -54,7 +63,10 @@ namespace SimdDictionary {
                     return ref buckets[index];
             }
 
-            // Will attempt to walk backwards through the buckets you previously visited.
+            /// <summary>
+            /// Walks back through the buckets you have previously visited.
+            /// </summary>
+            /// <returns>Each bucket you previously visited, exactly once, in reverse order, then NullRef.</returns>
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ref Bucket Retreat () {
                 if (index == initialIndex)
@@ -65,12 +77,18 @@ namespace SimdDictionary {
                 return ref buckets[index];
             }
 
+            /// <summary>
+            /// Indicates whether the enumerator has moved away from its original location and retreating is possible.
+            /// </summary>
             public bool HasMoved {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get => index != initialIndex;
             }
         }
 
+        /// <summary>
+        /// Visits every bucket in the container exactly once.
+        /// </summary>
         // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnumerateBuckets<TCallback> (Span<Bucket> buckets, ref TCallback callback)
@@ -88,6 +106,9 @@ namespace SimdDictionary {
             }
         }
 
+        /// <summary>
+        /// Visits every key/value pair in the container exactly once.
+        /// </summary>
         // Callback is passed by-ref so it can be used to store results from the enumeration operation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnumeratePairs<TCallback> (Span<Bucket> buckets, ref TCallback callback)
@@ -111,6 +132,13 @@ namespace SimdDictionary {
             }
         }
 
+        /// <summary>
+        /// Scans the suffix table for the bucket for suffixes that match the provided search vector.
+        /// </summary>
+        /// <param name="bucket">The bucket to scan.</param>
+        /// <param name="searchVector">A search vector (all bytes must be the desired suffix)</param>
+        /// <param name="bucketCount">bucket.Count</param>
+        /// <returns>The location of the first match, or 32.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static unsafe int FindSuffixInBucket (ref Bucket bucket, Vector128<byte> searchVector, int bucketCount) {
 #if !FORCE_SCALAR_IMPLEMENTATION
@@ -193,6 +221,11 @@ namespace SimdDictionary {
             }
         }
 
+        /// <summary>
+        /// Walks backwards through previously-visited buckets, adjusting their cascade counter upward or downward.
+        /// </summary>
+        /// <param name="enumerator">The enumerator that was used to visit buckets.</param>
+        /// <param name="increase">true to increase cascade counts (you added something), false to decrease (you removed something).</param>
         // In the common case this method never runs, but inlining allows some smart stuff to happen in terms of stack size and
         //  register usage.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Linq;
 
 namespace SimdDictionary {
     public partial class VectorizedDictionary<K, V> {
@@ -65,9 +66,9 @@ namespace SimdDictionary {
 
             bool ICollection.IsSynchronized => false;
             object ICollection.SyncRoot => Dictionary;
-            void ICollection.CopyTo(System.Array array, int index) {
-                throw new NotImplementedException();
-            }
+            void ICollection.CopyTo(System.Array array, int index) =>
+                // FIXME
+                ((ICollection)this.ToList()).CopyTo(array, index);
         }
 
         public struct ValueCollection : ICollection<V>, ICollection {
@@ -133,9 +134,9 @@ namespace SimdDictionary {
 
             bool ICollection.IsSynchronized => false;
             object ICollection.SyncRoot => Dictionary;
-            void ICollection.CopyTo(System.Array array, int index) {
-                throw new NotImplementedException();
-            }
+            void ICollection.CopyTo(System.Array array, int index) =>
+                // FIXME
+                ((ICollection)this.ToList()).CopyTo(array, index);
         }
 
         public struct Enumerator : IEnumerator<KeyValuePair<K, V>>, IDictionaryEnumerator {
