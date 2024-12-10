@@ -1,7 +1,9 @@
 ﻿// Performs a murmur3 finalization mix on hashcodes before using them, for collision resistance
 // #define PERMUTE_HASH_CODES
 
+using System;
 using System.Collections;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
@@ -9,11 +11,20 @@ using System.Runtime.Intrinsics;
 using System.Runtime.Serialization;
 
 namespace SimdDictionary {
+    [DebuggerDisplay("Count = {Count}")]
+    [Serializable]
     public partial class VectorizedDictionary<K, V> : 
         IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
-        ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable
+        ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable,
+        IDeserializationCallback
         where K : notnull
     {
+        // constants for serialization
+        private const string VersionName = "Version"; // Do not rename (binary serialization)
+        private const string HashSizeName = "HashSize"; // Do not rename (binary serialization). Must save buckets.Length
+        private const string KeyValuePairsName = "KeyValuePairs"; // Do not rename (binary serialization)
+        private const string ComparerName = "Comparer"; // Do not rename (binary serialization)
+
         private static class Statics {
     #pragma warning disable CA1825
             // HACK: Move this readonly field out of the dictionary type so it doesn't have a cctor.
@@ -26,7 +37,7 @@ namespace SimdDictionary {
     #pragma warning restore CA1825
         }
 
-        public readonly IEqualityComparer<K>? Comparer;
+        public IEqualityComparer<K>? Comparer { get; private set; }
 
         // In SCG.Dictionary, Keys and Values are on-demand-allocated classes. Here, they are on-demand-created structs.
         public KeyCollection Keys => new KeyCollection(this);
@@ -77,6 +88,16 @@ namespace SimdDictionary {
             }
         }
 
+        // [Obsolete(Obsoletions.LegacyFormatterImplMessage, DiagnosticId = Obsoletions.LegacyFormatterImplDiagId, UrlFormat = Obsoletions.SharedUrlFormat)]
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        protected VectorizedDictionary(SerializationInfo info, StreamingContext context)
+        {
+            // We can't do anything with the keys and values until the entire graph has been deserialized
+            // and we have a resonable estimate that GetHashCode is not going to fail.  For the time being,
+            // we'll just cache this.  The graph is not valid until OnDeserialization has been called.
+            // HashHelpers.SerializationInfoTable.Add(this, info);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void EnsureCapacity (int capacity) {
             if (capacity < 0)
@@ -98,6 +119,12 @@ namespace SimdDictionary {
             if (capacity < Count)
                 ThrowInvalidOperation();
 
+            // FIXME: Implement explicit size of zero
+            if (capacity == 0) {
+                _Capacity = 0;
+                _fastModMultiplier = 0;
+                _Buckets = Statics.EmptyBuckets;
+            }
 
             var oldBuckets = _Buckets;
             int bucketCount, adjustedCapacityRequest,
@@ -183,11 +210,11 @@ namespace SimdDictionary {
             // domain. The author hereby disclaims copyright to this source code.
             // Finalization mix - force all bits of a hash block to avalanche
             unchecked {
-	            hashCode ^= hashCode >> 16;
-	            hashCode *= 0x85ebca6b;
-	            hashCode ^= hashCode >> 13;
-	            hashCode *= 0xc2b2ae35;
-	            hashCode ^= hashCode >> 16;
+                hashCode ^= hashCode >> 16;
+                hashCode *= 0x85ebca6b;
+                hashCode ^= hashCode >> 13;
+                hashCode *= 0xc2b2ae35;
+                hashCode ^= hashCode >> 16;
             }
 #endif
             return hashCode;
@@ -340,12 +367,11 @@ namespace SimdDictionary {
         public bool Remove (K key) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
-                return TryRemove<DefaultComparerKeySearcher>(key, null, out _);
+                return TryRemove<DefaultComparerKeySearcher>(key, null, out Unsafe.NullRef<V>());
             else
-                return TryRemove<ComparerKeySearcher>(key, comparer, out _);
+                return TryRemove<ComparerKeySearcher>(key, comparer, out Unsafe.NullRef<V>());
         }
 
-        // Inlining required for disasmo
         public bool Remove (K key, out V value) {
             var comparer = Comparer;
             if (typeof(K).IsValueType && (comparer == null))
@@ -380,10 +406,14 @@ namespace SimdDictionary {
         }
 
         // Inlining required for acceptable codegen
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer, out V value)
             where TKeySearcher : struct, IKeySearcher
         {
+            // HACK: It is legal to pass a NullRef as the out-address for value
+            // This reduces code duplication for the two different overloads of Remove.
+            Unsafe.SkipInit(out value);
+
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
             var suffix = GetHashSuffix(hashCode);
             var searchVector = Vector128.Create(suffix);
@@ -394,7 +424,8 @@ namespace SimdDictionary {
                 ref var pair = ref TKeySearcher.FindKeyInBucket(ref bucket, startIndex, bucketCount, comparer, key, out int indexInBucket);
 
                 if (!Unsafe.IsNullRef(ref pair)) {
-                    value = pair.Value;
+                    if (!Unsafe.IsNullRef(ref value))
+                        value = pair.Value;
                     _Count--;
                     RemoveFromBucket(ref bucket, indexInBucket, bucketCount, ref pair);
                     // If we had to check multiple buckets before we found the match, go back and decrement cascade counters.
@@ -405,14 +436,16 @@ namespace SimdDictionary {
                 // Important: If the cascade counter is 0 and we didn't find the item, we don't want to check any other buckets.
                 // Otherwise, we'd scan the whole table fruitlessly looking for a matching key.
                 if (bucket.CascadeCount == 0) {
-                    value = default!;
+                    if (!Unsafe.IsNullRef(ref value))
+                        value = default!;
                     return false;
                 }
 
                 bucket = ref enumerator.Advance();
             } while (!Unsafe.IsNullRef(ref bucket));
 
-            value = default!;
+            if (!Unsafe.IsNullRef(ref value))
+                value = default!;
             return false;
         }
 
@@ -845,11 +878,67 @@ retry:
         }
 
         public virtual void GetObjectData (SerializationInfo info, StreamingContext context) {
-            throw new NotImplementedException();
+            if (info == null) {
+                throw new ArgumentNullException(nameof(info));
+            }
+
+            info.AddValue(VersionName, 0);
+            info.AddValue(ComparerName, Comparer, typeof(IEqualityComparer<K>));
+            info.AddValue(HashSizeName, Count);
+
+            if (Count > 0) {
+                var array = new KeyValuePair<K, V>[Count];
+                CopyTo(array, 0);
+                info.AddValue(KeyValuePairsName, array, typeof(KeyValuePair<K, V>[]));
+            }
         }
 
         public virtual void OnDeserialization (object? sender) {
-            throw new NotImplementedException();
+            // FIXME
+            // HashHelpers.SerializationInfoTable.TryGetValue(this, out SerializationInfo? siInfo);
+            SerializationInfo? siInfo = null;
+
+            if (siInfo == null)
+            {
+                // We can return immediately if this function is called twice.
+                // Note we remove the serialization info from the table at the end of this method.
+                return;
+            }
+
+            // int realVersion = siInfo.GetInt32(VersionName);
+            int hashsize = siInfo.GetInt32(HashSizeName);
+            Comparer = (IEqualityComparer<K>)siInfo.GetValue(ComparerName, typeof(IEqualityComparer<K>))!; // When serialized if comparer is null, we use the default.
+            if (_Count > 0)
+                throw new InvalidOperationException("Dictionary not empty before deserialization");
+
+            if (hashsize != 0)
+            {
+                Resize(hashsize);
+
+                KeyValuePair<K, V>[]? array = (KeyValuePair<K, V>[]?)
+                    siInfo.GetValue(KeyValuePairsName, typeof(KeyValuePair<K, V>[]));
+
+                if (array == null)
+                {
+                    throw new SerializationException("Missing keys");
+                }
+
+                for (int i = 0; i < array.Length; i++)
+                {
+                    if (array[i].Key == null)
+                    {
+                        throw new SerializationException("Null key");
+                    }
+
+                    Add(array[i].Key, array[i].Value);
+                }
+            }
+            else
+            {
+                Resize(0);
+            }
+
+            // HashHelpers.SerializationInfoTable.Remove(this);
         }
     }
 }

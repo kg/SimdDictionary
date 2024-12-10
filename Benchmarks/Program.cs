@@ -137,6 +137,10 @@ namespace Benchmarks {
                 if (copy.Count != 0)
                     throw new Exception();
 
+                copy.TrimExcess();
+                if (copy.Capacity >= 14)
+                    throw new Exception();
+
                 for (int i = 0; i < c; i++) {
                     copy.Add(keys[i], values[i]);
                     if (!copy.TryGetValue(keys[i], out _))

@@ -197,7 +197,7 @@ iteration:
                 } else if (true) {
                     // Hand-unrolling the search into four comparisons per loop iteration is a significant performance improvement
                     //  for a moderate code size penalty (733b -> 826b; 399usec -> 321usec, vs BCL's 421b and 270usec)
-                    // If a bucket contains 13 or more items we will erroneously check lanes 15/16 but this is harmless.
+                    // If a bucket contains 13 or more items we will erroneously check lanes 14/15/16 but this is harmless.
                     var haystack = (byte*)Unsafe.AsPointer(ref bucket);
                     for (int i = 0; i < bucketCount; i += 4, haystack += 4) {
                         if (haystack[0] == searchVector[0])

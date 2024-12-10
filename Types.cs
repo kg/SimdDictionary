@@ -31,15 +31,15 @@ namespace SimdDictionary {
 
         // Internal for use by CollectionsMarshal
         // It would be nice to use KeyValuePair instead but it's a readonly type and we need the ability to reassign Value
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        [StructLayout(LayoutKind.Sequential)]
         internal struct Pair {
             public K Key;
             public V Value;
         }
         
         // This size must match or exceed BucketSizeI
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
         [InlineArray(13)]
+        [StructLayout(LayoutKind.Sequential)]
         private struct InlinePairArray {
             public Pair Pair0;
         }
