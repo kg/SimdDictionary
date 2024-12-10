@@ -13,11 +13,11 @@ using System.Runtime.Serialization;
 namespace SimdDictionary {
     [DebuggerDisplay("Count = {Count}")]
     [Serializable]
-    public partial class VectorizedDictionary<K, V> : 
-        IDictionary<K, V>, IDictionary, IReadOnlyDictionary<K, V>, 
-        ICollection<KeyValuePair<K, V>>, ICloneable, ISerializable,
+    public partial class VectorizedDictionary<TKey, TValue> : 
+        IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>, 
+        ICollection<KeyValuePair<TKey, TValue>>, ICloneable, ISerializable,
         IDeserializationCallback
-        where K : notnull
+        where TKey : notnull
     {
         // constants for serialization
         private const string VersionName = "Version"; // Do not rename (binary serialization)
@@ -37,7 +37,7 @@ namespace SimdDictionary {
     #pragma warning restore CA1825
         }
 
-        public IEqualityComparer<K>? Comparer { get; private set; }
+        public IEqualityComparer<TKey>? Comparer { get; private set; }
 
         // In SCG.Dictionary, Keys and Values are on-demand-allocated classes. Here, they are on-demand-created structs.
         public KeyCollection Keys => new KeyCollection(this);
@@ -45,8 +45,8 @@ namespace SimdDictionary {
         // These optimize for the scenario where someone uses IDictionary.Keys or IDictionary<K, V>.Keys. Normally this
         //  would have to box the KeyCollection/ValueCollection structs on demand, so we cache the boxed version of them
         //  in these fields to get rid of the per-use allocation. Most application scenarios will never allocate these.
-        private ICollection<K>? _BoxedKeys;
-        private ICollection<V>? _BoxedValues;
+        private ICollection<TKey>? _BoxedKeys;
+        private ICollection<TValue>? _BoxedValues;
         // It's important for an empty dictionary to have both count and capacity be 0
         private int _Count = 0, 
             _Capacity = 0;
@@ -62,22 +62,22 @@ namespace SimdDictionary {
             : this (capacity, null) {
         }
 
-        public VectorizedDictionary (IEqualityComparer<K>? comparer)
+        public VectorizedDictionary (IEqualityComparer<TKey>? comparer)
             : this (InitialCapacity, comparer) {
         }
 
-        public VectorizedDictionary (int capacity, IEqualityComparer<K>? comparer) {
-            if (typeof(K).IsValueType)
+        public VectorizedDictionary (int capacity, IEqualityComparer<TKey>? comparer) {
+            if (typeof(TKey).IsValueType)
                 Comparer = comparer;
             // HACK: DefaultEqualityComparer<K> for string is really bad
-            else if (typeof(K) == typeof(string))
-                Comparer = comparer ?? (IEqualityComparer<K>)StringComparer.Ordinal;
+            else if (typeof(TKey) == typeof(string))
+                Comparer = comparer ?? (IEqualityComparer<TKey>)StringComparer.Ordinal;
             else
-                Comparer = comparer ?? EqualityComparer<K>.Default;            
+                Comparer = comparer ?? EqualityComparer<TKey>.Default;            
             EnsureCapacity(capacity);
         }
 
-        public VectorizedDictionary (VectorizedDictionary<K, V> source) {
+        public VectorizedDictionary (VectorizedDictionary<TKey, TValue> source) {
             Comparer = source.Comparer;
             _Count = source._Count;
             _Capacity = source._Capacity;
@@ -184,9 +184,9 @@ namespace SimdDictionary {
             throw new NotImplementedException();
 
         private readonly struct RehashCallback : IPairCallback {
-            public readonly VectorizedDictionary<K, V> Self;
+            public readonly VectorizedDictionary<TKey, TValue> Self;
 
-            public RehashCallback (VectorizedDictionary<K, V> self) {
+            public RehashCallback (VectorizedDictionary<TKey, TValue> self) {
                 Self = self;
             }
 
@@ -247,9 +247,9 @@ namespace SimdDictionary {
 
         // Internal for access from CollectionsMarshal
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref Pair FindKey (K key) {
+        internal ref Pair FindKey (TKey key) {
             var comparer = Comparer;
-            if (typeof(K).IsValueType && (comparer == null))
+            if (typeof(TKey).IsValueType && (comparer == null))
                 return ref FindKey<DefaultComparerKeySearcher>(key, null);
             else
                 return ref FindKey<ComparerKeySearcher>(key, comparer);
@@ -258,7 +258,7 @@ namespace SimdDictionary {
         // Performance is much worse unless this method is inlined, I'm not sure why.
         // If we disable inlining for it, our generated code size is dramatically reduced.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private ref Pair FindKey<TKeySearcher> (K key, IEqualityComparer<K>? comparer)
+        private ref Pair FindKey<TKeySearcher> (TKey key, IEqualityComparer<TKey>? comparer)
             where TKeySearcher : struct, IKeySearcher 
         {
             var hashCode = TKeySearcher.GetHashCode(comparer, key);
@@ -286,16 +286,16 @@ namespace SimdDictionary {
 
         // Internal for access from CollectionsMarshal
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref Pair TryInsert (K key, V value, InsertMode mode, out InsertResult result) {
+        internal ref Pair TryInsert (TKey key, TValue value, InsertMode mode, out InsertResult result) {
             var comparer = Comparer;
-            if (typeof(K).IsValueType && (comparer == null))
+            if (typeof(TKey).IsValueType && (comparer == null))
                 return ref TryInsert<DefaultComparerKeySearcher>(key, value, mode, null, out result);
             else
                 return ref TryInsert<ComparerKeySearcher>(key, value, mode, comparer, out result);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ref Pair TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, K key, V value) {
+        private static ref Pair TryInsertIntoBucket (ref Bucket bucket, byte suffix, int bucketCount, TKey key, TValue value) {
             if (bucketCount >= BucketSizeI)
                 return ref Unsafe.NullRef<Pair>();
 
@@ -311,7 +311,7 @@ namespace SimdDictionary {
 
         // Inlining required for acceptable codegen
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ref Pair TryInsert<TKeySearcher> (K key, V value, InsertMode mode, IEqualityComparer<K>? comparer, out InsertResult result) 
+        private ref Pair TryInsert<TKeySearcher> (TKey key, TValue value, InsertMode mode, IEqualityComparer<TKey>? comparer, out InsertResult result) 
             where TKeySearcher : struct, IKeySearcher 
         {
             var needToGrow = (_Count >= _Capacity);
@@ -364,17 +364,18 @@ namespace SimdDictionary {
 
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool Remove (K key) {
+        public bool Remove (TKey key) {
             var comparer = Comparer;
-            if (typeof(K).IsValueType && (comparer == null))
-                return TryRemove<DefaultComparerKeySearcher>(key, null, out Unsafe.NullRef<V>());
+            // It's legal to pass Unsafe.NullRef as the destination address here because TryRemove handles it explicitly.
+            if (typeof(TKey).IsValueType && (comparer == null))
+                return TryRemove<DefaultComparerKeySearcher>(key, null, out Unsafe.NullRef<TValue>());
             else
-                return TryRemove<ComparerKeySearcher>(key, comparer, out Unsafe.NullRef<V>());
+                return TryRemove<ComparerKeySearcher>(key, comparer, out Unsafe.NullRef<TValue>());
         }
 
-        public bool Remove (K key, out V value) {
+        public bool Remove (TKey key, out TValue value) {
             var comparer = Comparer;
-            if (typeof(K).IsValueType && (comparer == null))
+            if (typeof(TKey).IsValueType && (comparer == null))
                 return TryRemove<DefaultComparerKeySearcher>(key, null, out value);
             else
                 return TryRemove<ComparerKeySearcher>(key, comparer, out value);
@@ -405,9 +406,9 @@ namespace SimdDictionary {
             }
         }
 
-        // Inlining required for acceptable codegen
+        // Don't force inlining (to reduce code size), since Remove has two overloads that inline this 1-2 times each
         // [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryRemove<TKeySearcher> (K key, IEqualityComparer<K>? comparer, out V value)
+        private bool TryRemove<TKeySearcher> (TKey key, IEqualityComparer<TKey>? comparer, out TValue value)
             where TKeySearcher : struct, IKeySearcher
         {
             // HACK: It is legal to pass a NullRef as the out-address for value
@@ -449,7 +450,7 @@ namespace SimdDictionary {
             return false;
         }
 
-        public V this[K key] { 
+        public TValue this[TKey key] { 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
                 ref var pair = ref FindKey(key);
@@ -473,13 +474,13 @@ namespace SimdDictionary {
             }
         }
 
-        ICollection<K> IDictionary<K, V>.Keys => (_BoxedKeys ??= Keys);
-        ICollection<V> IDictionary<K, V>.Values => (_BoxedValues ??= Values);
+        ICollection<TKey> IDictionary<TKey, TValue>.Keys => (_BoxedKeys ??= Keys);
+        ICollection<TValue> IDictionary<TKey, TValue>.Values => (_BoxedValues ??= Values);
 
         public int Count => _Count;
         public int Capacity => _Capacity;
 
-        bool ICollection<KeyValuePair<K, V>>.IsReadOnly => false;
+        bool ICollection<KeyValuePair<TKey, TValue>>.IsReadOnly => false;
 
         bool IDictionary.IsFixedSize => false;
 
@@ -493,20 +494,20 @@ namespace SimdDictionary {
 
         object ICollection.SyncRoot => this;
 
-        IEnumerable<K> IReadOnlyDictionary<K, V>.Keys => (_BoxedKeys ??= Keys);
+        IEnumerable<TKey> IReadOnlyDictionary<TKey, TValue>.Keys => (_BoxedKeys ??= Keys);
 
-        IEnumerable<V> IReadOnlyDictionary<K, V>.Values => (_BoxedValues ??= Values);
+        IEnumerable<TValue> IReadOnlyDictionary<TKey, TValue>.Values => (_BoxedValues ??= Values);
 
         object? IDictionary.this[object key] {
-            get => this[(K)key];
+            get => this[(TKey)key];
 #pragma warning disable CS8600
 #pragma warning disable CS8601
-            set => this[(K)key] = (V)value;
+            set => this[(TKey)key] = (TValue)value;
 #pragma warning restore CS8600
 #pragma warning restore CS8601
         }
 
-        public void Add (K key, V value) {
+        public void Add (TKey key, TValue value) {
             var ok = TryAdd(key, value);
             if (!ok)
                 throw new ArgumentException($"Key already exists: {key}");
@@ -514,7 +515,7 @@ namespace SimdDictionary {
 
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryAdd (K key, V value) {
+        public bool TryAdd (TKey key, TValue value) {
         retry:
             TryInsert(key, value, InsertMode.EnsureUnique, out var result);
             switch (result) {
@@ -531,7 +532,7 @@ namespace SimdDictionary {
             }
         }
 
-        void ICollection<KeyValuePair<K, V>>.Add (KeyValuePair<K, V> item) =>
+        void ICollection<KeyValuePair<TKey, TValue>>.Add (KeyValuePair<TKey, TValue> item) =>
             Add(item.Key, item.Value);
 
         private readonly struct ClearCallback : IBucketCallback {
@@ -581,26 +582,26 @@ namespace SimdDictionary {
             EnumerateBuckets(_Buckets, ref c);
         }
 
-        bool ICollection<KeyValuePair<K, V>>.Contains (KeyValuePair<K, V> item) {
+        bool ICollection<KeyValuePair<TKey, TValue>>.Contains (KeyValuePair<TKey, TValue> item) {
             ref var pair = ref FindKey(item.Key);
             return !Unsafe.IsNullRef(ref pair) && (pair.Value?.Equals(item.Value) == true);
         }
 
-        public bool ContainsKey (K key) =>
+        public bool ContainsKey (TKey key) =>
             !Unsafe.IsNullRef(ref FindKey(key));
 
         private struct ContainsValueCallback : IPairCallback {
-            public readonly V Value;
+            public readonly TValue Value;
             public bool Result;
 
-            public ContainsValueCallback (V value) {
+            public ContainsValueCallback (TValue value) {
                 Value = value;
                 Result = false;
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Pair (ref Pair pair) {
-                if (EqualityComparer<V>.Default.Equals(pair.Value, Value)) {
+                if (EqualityComparer<TValue>.Default.Equals(pair.Value, Value)) {
                     Result = true;
                     return false;
                 }
@@ -608,7 +609,7 @@ namespace SimdDictionary {
             }
         }
 
-        public bool ContainsValue (V value) {
+        public bool ContainsValue (TValue value) {
             if (_Count == 0)
                 return false;
 
@@ -636,7 +637,7 @@ namespace SimdDictionary {
             EnumeratePairs(_Buckets, ref state);
         }
 
-        void ICollection<KeyValuePair<K, V>>.CopyTo (KeyValuePair<K, V>[] array, int arrayIndex) {
+        void ICollection<KeyValuePair<TKey, TValue>>.CopyTo (KeyValuePair<TKey, TValue>[] array, int arrayIndex) {
             CopyToArray(array, arrayIndex);
         }
 
@@ -646,19 +647,19 @@ namespace SimdDictionary {
         public RefEnumerator GetRefEnumerator () =>
             new RefEnumerator(this);
 
-        IEnumerator<KeyValuePair<K, V>> IEnumerable<KeyValuePair<K, V>>.GetEnumerator () =>
+        IEnumerator<KeyValuePair<TKey, TValue>> IEnumerable<KeyValuePair<TKey, TValue>>.GetEnumerator () =>
             GetEnumerator();
 
         IEnumerator IEnumerable.GetEnumerator () =>
             GetEnumerator();
 
-        bool ICollection<KeyValuePair<K, V>>.Remove (KeyValuePair<K, V> item) =>
+        bool ICollection<KeyValuePair<TKey, TValue>>.Remove (KeyValuePair<TKey, TValue> item) =>
             // FIXME: Check value
             Remove(item.Key);
 
         // Inlining required for disasmo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGetValue (K key, out V value) {
+        public bool TryGetValue (TKey key, out TValue value) {
             ref var pair = ref FindKey(key);
             if (Unsafe.IsNullRef(ref pair)) {
                 value = default!;
@@ -669,7 +670,7 @@ namespace SimdDictionary {
             }
         }
 
-        public V AddOrUpdate (K key, V addValue, Func<K, V, V> updateValueFactory) {
+        public TValue AddOrUpdate (TKey key, TValue addValue, Func<TKey, TValue, TValue> updateValueFactory) {
 retry:
             ref var pair = ref TryInsert(key, addValue, InsertMode.EnsureUnique, out var result);
             switch (result) {
@@ -686,7 +687,7 @@ retry:
             }
         }
 
-        public V GetOrAdd (K key, Func<K, V> valueFactory) {
+        public TValue GetOrAdd (TKey key, Func<TKey, TValue> valueFactory) {
             // We insert a placeholder if the key is not already present, then overwrite the placeholder.
             // This is faster than doing two passes.
 retry:
@@ -706,20 +707,20 @@ retry:
         }
 
         public object Clone () =>
-            new VectorizedDictionary<K, V>(this);
+            new VectorizedDictionary<TKey, TValue>(this);
 
         private struct CopyToKvp : IPairCallback {
-            public readonly KeyValuePair<K, V>[] Array;
+            public readonly KeyValuePair<TKey, TValue>[] Array;
             public int Index;
 
-            public CopyToKvp (KeyValuePair<K, V>[] array, int index) {
+            public CopyToKvp (KeyValuePair<TKey, TValue>[] array, int index) {
                 Array = array;
                 Index = index;
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Pair (ref Pair pair) {
-                Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
+                Array[Index++] = new KeyValuePair<TKey, TValue>(pair.Key, pair.Value);
                 return true;
             }
         }
@@ -751,7 +752,7 @@ retry:
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Pair (ref Pair pair) {
-                Array[Index++] = new KeyValuePair<K, V>(pair.Key, pair.Value);
+                Array[Index++] = new KeyValuePair<TKey, TValue>(pair.Key, pair.Value);
                 return true;
             }
         }
@@ -764,7 +765,7 @@ retry:
             if (array.Length - index < Count)
                 throw new ArgumentException("Destination array too small", nameof(index));
 
-            if (array is KeyValuePair<K, V>[] kvp) {
+            if (array is KeyValuePair<TKey, TValue>[] kvp) {
                 var c = new CopyToKvp(kvp, index);
                 EnumeratePairs(_Buckets, ref c);
             } else if (array is DictionaryEntry[] de) {
@@ -777,7 +778,7 @@ retry:
                 throw new ArgumentException("Unsupported destination array type");
         }
 
-        public void CopyTo (KeyValuePair<K, V>[] array, int index) {
+        public void CopyTo (KeyValuePair<TKey, TValue>[] array, int index) {
             CopyToArray(array, index);
         }
 
@@ -799,32 +800,30 @@ retry:
             }
         }
 
-        public void AnalyzeBuckets (out int normalBuckets, out int overflowedBuckets, out int degradedBuckets) {
+        public (int normal, int overflowed, int degraded) AnalyzeBuckets () {
             var c = new AnalyzeCallback();
             EnumerateBuckets(_Buckets, ref c);
-            normalBuckets = c.Normal;
-            overflowedBuckets = c.Overflowed;
-            degradedBuckets = c.Degraded;
+            return (c.Normal, c.Overflowed, c.Degraded);
         }
 
         void IDictionary.Add (object key, object? value) =>
 #pragma warning disable CS8600
 #pragma warning disable CS8604
-            Add((K)key, (V)value);
+            Add((TKey)key, (TValue)value);
 #pragma warning restore CS8600
 #pragma warning restore CS8604
 
         bool IDictionary.Contains (object key) =>
-            ContainsKey((K)key);
+            ContainsKey((TKey)key);
 
         IDictionaryEnumerator IDictionary.GetEnumerator () =>
             new Enumerator(this);
 
         void IDictionary.Remove (object key) =>
-            Remove((K)key);
+            Remove((TKey)key);
 
         void ICollection.CopyTo (Array array, int index) {
-            if (array is KeyValuePair<K, V>[] kvpa)
+            if (array is KeyValuePair<TKey, TValue>[] kvpa)
                 CopyTo(kvpa, 0);
             else if (array is object[] oa)
                 CopyTo(oa, 0);
@@ -844,7 +843,7 @@ retry:
         public bool TryGetAlternateLookup<TAlternateKey> (out AlternateLookup<TAlternateKey> result)
             where TAlternateKey : notnull, allows ref struct 
         {
-            if (Comparer is IAlternateEqualityComparer<TAlternateKey, K> aec) {
+            if (Comparer is IAlternateEqualityComparer<TAlternateKey, TKey> aec) {
                 result = new AlternateLookup<TAlternateKey>(this, aec);
                 return true;
             }
@@ -883,13 +882,13 @@ retry:
             }
 
             info.AddValue(VersionName, 0);
-            info.AddValue(ComparerName, Comparer, typeof(IEqualityComparer<K>));
+            info.AddValue(ComparerName, Comparer, typeof(IEqualityComparer<TKey>));
             info.AddValue(HashSizeName, Count);
 
             if (Count > 0) {
-                var array = new KeyValuePair<K, V>[Count];
+                var array = new KeyValuePair<TKey, TValue>[Count];
                 CopyTo(array, 0);
-                info.AddValue(KeyValuePairsName, array, typeof(KeyValuePair<K, V>[]));
+                info.AddValue(KeyValuePairsName, array, typeof(KeyValuePair<TKey, TValue>[]));
             }
         }
 
@@ -907,7 +906,7 @@ retry:
 
             // int realVersion = siInfo.GetInt32(VersionName);
             int hashsize = siInfo.GetInt32(HashSizeName);
-            Comparer = (IEqualityComparer<K>)siInfo.GetValue(ComparerName, typeof(IEqualityComparer<K>))!; // When serialized if comparer is null, we use the default.
+            Comparer = (IEqualityComparer<TKey>)siInfo.GetValue(ComparerName, typeof(IEqualityComparer<TKey>))!; // When serialized if comparer is null, we use the default.
             if (_Count > 0)
                 throw new InvalidOperationException("Dictionary not empty before deserialization");
 
@@ -915,8 +914,8 @@ retry:
             {
                 Resize(hashsize);
 
-                KeyValuePair<K, V>[]? array = (KeyValuePair<K, V>[]?)
-                    siInfo.GetValue(KeyValuePairsName, typeof(KeyValuePair<K, V>[]));
+                KeyValuePair<TKey, TValue>[]? array = (KeyValuePair<TKey, TValue>[]?)
+                    siInfo.GetValue(KeyValuePairsName, typeof(KeyValuePair<TKey, TValue>[]));
 
                 if (array == null)
                 {

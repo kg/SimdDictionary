@@ -14,7 +14,7 @@ using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    public partial class VectorizedDictionary<K, V> {
+    public partial class VectorizedDictionary<TKey, TValue> {
         // Extracting all this logic into each caller improves codegen slightly + reduces code size slightly, but the
         //  duplication reduces maintainability, so I'm pretty happy doing this instead.
         // We rely on inlining to cause this struct to completely disappear, and its fields to become registers or individual locals.
@@ -272,15 +272,15 @@ iteration:
         private struct DefaultComparerKeySearcher : IKeySearcher {
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
-                return FinalizeHashCode(unchecked((uint)EqualityComparer<K>.Default.GetHashCode(key!)));
+            public static uint GetHashCode (IEqualityComparer<TKey>? comparer, TKey key) {
+                return FinalizeHashCode(unchecked((uint)EqualityComparer<TKey>.Default.GetHashCode(key!)));
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static unsafe ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
-                IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+                IEqualityComparer<TKey>? comparer, TKey needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);
@@ -291,7 +291,7 @@ iteration:
 
                 ref Pair pair = ref Unsafe.Add(ref bucket.Pairs.Pair0, indexInBucket);
                 while (true) {
-                    if (EqualityComparer<K>.Default.Equals(needle, pair.Key)) {
+                    if (EqualityComparer<TKey>.Default.Equals(needle, pair.Key)) {
                         // We could optimize out the bucketCount local to prevent a stack spill in some cases by doing
                         //  Unsafe.ByteOffset(...) / sizeof(Pair), but the potential idiv is extremely painful
                         matchIndexInBucket = bucketCount - count;
@@ -309,7 +309,7 @@ iteration:
 
         private struct ComparerKeySearcher : IKeySearcher {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static uint GetHashCode (IEqualityComparer<K>? comparer, K key) {
+            public static uint GetHashCode (IEqualityComparer<TKey>? comparer, TKey key) {
                 return FinalizeHashCode(unchecked((uint)comparer!.GetHashCode(key!)));
             }
 
@@ -317,7 +317,7 @@ iteration:
             public static unsafe ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, int indexInBucket, int bucketCount, 
-                IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+                IEqualityComparer<TKey>? comparer, TKey needle, out int matchIndexInBucket
             ) {
                 Unsafe.SkipInit(out matchIndexInBucket);
                 Debug.Assert(indexInBucket >= 0);

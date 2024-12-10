@@ -4,14 +4,14 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    public partial class VectorizedDictionary<K, V> {
+    public partial class VectorizedDictionary<TKey, TValue> {
         public readonly struct AlternateLookup<TAlternateKey>
             where TAlternateKey : notnull, allows ref struct {
 
-            public readonly VectorizedDictionary<K, V> Dictionary;
-            public readonly IAlternateEqualityComparer<TAlternateKey, K> Comparer;
+            public readonly VectorizedDictionary<TKey, TValue> Dictionary;
+            public readonly IAlternateEqualityComparer<TAlternateKey, TKey> Comparer;
 
-            internal AlternateLookup (VectorizedDictionary<K, V> dictionary, IAlternateEqualityComparer<TAlternateKey, K> comparer) {
+            internal AlternateLookup (VectorizedDictionary<TKey, TValue> dictionary, IAlternateEqualityComparer<TAlternateKey, TKey> comparer) {
                 if (dictionary == null)
                     throw new ArgumentNullException(nameof(dictionary));
                 if (comparer == null)
@@ -20,7 +20,7 @@ namespace SimdDictionary {
                 Comparer = comparer;
             }
 
-            public V this [TAlternateKey key] {
+            public TValue this [TAlternateKey key] {
                 get {
                     ref var pair = ref FindKey(key);
                     if (Unsafe.IsNullRef(ref pair))
@@ -34,7 +34,7 @@ namespace SimdDictionary {
                 return !Unsafe.IsNullRef(ref pair);
             }
 
-            public bool TryGetValue (TAlternateKey key, out V value) {
+            public bool TryGetValue (TAlternateKey key, out TValue value) {
                 ref var pair = ref FindKey(key);
                 if (Unsafe.IsNullRef(ref pair)) {
                     value = default!;
@@ -45,7 +45,7 @@ namespace SimdDictionary {
                 }
             }
 
-            public bool TryAdd (TAlternateKey key, V value) {
+            public bool TryAdd (TAlternateKey key, TValue value) {
                 // FIXME: Duplicate the TryInsert logic from SimdDictionary to avoid the Create call when there is a key collision
                 return Dictionary.TryAdd(Comparer.Create(key), value);
             }
@@ -80,7 +80,7 @@ namespace SimdDictionary {
             private static ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket,
-                int indexInBucket, int bucketCount, IAlternateEqualityComparer<TAlternateKey, K> comparer, 
+                int indexInBucket, int bucketCount, IAlternateEqualityComparer<TAlternateKey, TKey> comparer, 
                 TAlternateKey needle, out int matchIndexInBucket
             ) {
                 Debug.Assert(indexInBucket >= 0);

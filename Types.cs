@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace SimdDictionary {
-    public partial class VectorizedDictionary<K, V>
-        where K : notnull
+    public partial class VectorizedDictionary<TKey, TValue>
+        where TKey : notnull
     {
         public const int InitialCapacity = 0,
             // User-specified capacity values will be increased by this percentage in order
@@ -27,14 +27,14 @@ namespace SimdDictionary {
             CascadeSlot = 14,
             DegradedCascadeCount = 0xFFFF;
 
-        public delegate bool ForEachCallback (int index, in K key, ref V value);
+        public delegate bool ForEachCallback (int index, in TKey key, ref TValue value);
 
         // Internal for use by CollectionsMarshal
         // It would be nice to use KeyValuePair instead but it's a readonly type and we need the ability to reassign Value
         [StructLayout(LayoutKind.Sequential)]
         internal struct Pair {
-            public K Key;
-            public V Value;
+            public TKey Key;
+            public TValue Value;
         }
         
         // This size must match or exceed BucketSizeI
@@ -133,10 +133,10 @@ namespace SimdDictionary {
             static abstract ref Pair FindKeyInBucket (
                 // We have to use UnscopedRef to allow lazy initialization
                 [UnscopedRef] ref Bucket bucket, int startIndexInBucket, int bucketCount,
-                IEqualityComparer<K>? comparer, K needle, out int matchIndexInBucket
+                IEqualityComparer<TKey>? comparer, TKey needle, out int matchIndexInBucket
             );
 
-            static abstract uint GetHashCode (IEqualityComparer<K>? comparer, K key);
+            static abstract uint GetHashCode (IEqualityComparer<TKey>? comparer, TKey key);
         }
 
         // Used to encapsulate operations that enumerate all the buckets synchronously (i.e. Clear)

@@ -68,7 +68,7 @@ namespace Benchmarks {
         public override void Setup () {
             base.Setup();
 
-            Dict.AnalyzeBuckets(out int normal, out int overflowed, out int degraded);
+            (int normal, int overflowed, int degraded) = Dict.AnalyzeBuckets();
             double total = normal + overflowed + degraded;
             if (false) {
                 using (var sw = new StreamWriter("E:\\Desktop\\simdlookup.log", true, Encoding.UTF8))

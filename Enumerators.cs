@@ -5,17 +5,17 @@ using System.Runtime.CompilerServices;
 using System.Linq;
 
 namespace SimdDictionary {
-    public partial class VectorizedDictionary<K, V> {
-        public struct KeyCollection : ICollection<K>, ICollection {
-            public readonly VectorizedDictionary<K, V> Dictionary;
+    public partial class VectorizedDictionary<TKey, TValue> {
+        public struct KeyCollection : ICollection<TKey>, ICollection {
+            public readonly VectorizedDictionary<TKey, TValue> Dictionary;
 
-            public struct Enumerator : IEnumerator<K> {
-                private VectorizedDictionary<K, V>.Enumerator Inner;
+            public struct Enumerator : IEnumerator<TKey> {
+                private VectorizedDictionary<TKey, TValue>.Enumerator Inner;
 
-                public K Current => Inner.CurrentKey;
+                public TKey Current => Inner.CurrentKey;
                 object? IEnumerator.Current => Inner.CurrentKey;
 
-                internal Enumerator (VectorizedDictionary<K, V> dictionary) {
+                internal Enumerator (VectorizedDictionary<TKey, TValue> dictionary) {
                     Inner = dictionary.GetEnumerator();
                 }
 
@@ -29,23 +29,23 @@ namespace SimdDictionary {
                     Inner.Reset();
             }
 
-            internal KeyCollection (VectorizedDictionary<K, V> dictionary) {
+            internal KeyCollection (VectorizedDictionary<TKey, TValue> dictionary) {
                 Dictionary = dictionary;
             }
 
             public int Count => Dictionary.Count;
-            bool ICollection<K>.IsReadOnly => true;
+            bool ICollection<TKey>.IsReadOnly => true;
 
-            void ICollection<K>.Add (K item) =>
+            void ICollection<TKey>.Add (TKey item) =>
                 ThrowInvalidOperation();
 
-            void ICollection<K>.Clear () =>
+            void ICollection<TKey>.Clear () =>
                 Dictionary.Clear();
 
-            bool ICollection<K>.Contains (K item) =>
+            bool ICollection<TKey>.Contains (TKey item) =>
                 Dictionary.ContainsKey(item);
 
-            void ICollection<K>.CopyTo (K[] array, int arrayIndex) {
+            void ICollection<TKey>.CopyTo (TKey[] array, int arrayIndex) {
                 // FIXME: Use EnumerateBuckets
                 using (var e = GetEnumerator())
                     while (e.MoveNext())
@@ -55,13 +55,13 @@ namespace SimdDictionary {
             public Enumerator GetEnumerator () =>
                 new Enumerator(Dictionary);
 
-            IEnumerator<K> IEnumerable<K>.GetEnumerator () =>
+            IEnumerator<TKey> IEnumerable<TKey>.GetEnumerator () =>
                 GetEnumerator();
 
             IEnumerator IEnumerable.GetEnumerator () =>
                 GetEnumerator();
 
-            bool ICollection<K>.Remove (K item) =>
+            bool ICollection<TKey>.Remove (TKey item) =>
                 Dictionary.Remove(item);
 
             bool ICollection.IsSynchronized => false;
@@ -71,16 +71,16 @@ namespace SimdDictionary {
                 ((ICollection)this.ToList()).CopyTo(array, index);
         }
 
-        public struct ValueCollection : ICollection<V>, ICollection {
-            public readonly VectorizedDictionary<K, V> Dictionary;
+        public struct ValueCollection : ICollection<TValue>, ICollection {
+            public readonly VectorizedDictionary<TKey, TValue> Dictionary;
 
-            public struct Enumerator : IEnumerator<V> {
-                private VectorizedDictionary<K, V>.Enumerator Inner;
+            public struct Enumerator : IEnumerator<TValue> {
+                private VectorizedDictionary<TKey, TValue>.Enumerator Inner;
 
-                public V Current => Inner.CurrentValue;
+                public TValue Current => Inner.CurrentValue;
                 object? IEnumerator.Current => Inner.CurrentValue;
 
-                internal Enumerator (VectorizedDictionary<K, V> dictionary) {
+                internal Enumerator (VectorizedDictionary<TKey, TValue> dictionary) {
                     Inner = dictionary.GetEnumerator();
                 }
 
@@ -94,26 +94,26 @@ namespace SimdDictionary {
                     Inner.Reset();
             }
 
-            internal ValueCollection (VectorizedDictionary<K, V> dictionary) {
+            internal ValueCollection (VectorizedDictionary<TKey, TValue> dictionary) {
                 Dictionary = dictionary;
             }
 
             public int Count => Dictionary.Count;
-            bool ICollection<V>.IsReadOnly => true;
+            bool ICollection<TValue>.IsReadOnly => true;
 
-            void ICollection<V>.Add (V item) =>
+            void ICollection<TValue>.Add (TValue item) =>
                 ThrowInvalidOperation();
 
-            void ICollection<V>.Clear () =>
+            void ICollection<TValue>.Clear () =>
                 Dictionary.Clear();
 
             // FIXME
-            bool ICollection<V>.Contains (V item) {
+            bool ICollection<TValue>.Contains (TValue item) {
                 ThrowInvalidOperation();
                 return false;
             }
 
-            void ICollection<V>.CopyTo (V[] array, int arrayIndex) {
+            void ICollection<TValue>.CopyTo (TValue[] array, int arrayIndex) {
                 // FIXME: Use EnumerateBuckets
                 using (var e = GetEnumerator())
                     while (e.MoveNext())
@@ -123,13 +123,13 @@ namespace SimdDictionary {
             public Enumerator GetEnumerator () =>
                 new Enumerator(Dictionary);
 
-            IEnumerator<V> IEnumerable<V>.GetEnumerator () =>
+            IEnumerator<TValue> IEnumerable<TValue>.GetEnumerator () =>
                 GetEnumerator();
 
             IEnumerator IEnumerable.GetEnumerator () =>
                 GetEnumerator();
 
-            bool ICollection<V>.Remove (V item) =>
+            bool ICollection<TValue>.Remove (TValue item) =>
                 throw new InvalidOperationException();
 
             bool ICollection.IsSynchronized => false;
@@ -139,7 +139,7 @@ namespace SimdDictionary {
                 ((ICollection)this.ToList()).CopyTo(array, index);
         }
 
-        public struct Enumerator : IEnumerator<KeyValuePair<K, V>>, IDictionaryEnumerator {
+        public struct Enumerator : IEnumerator<KeyValuePair<TKey, TValue>>, IDictionaryEnumerator {
             private int _bucketIndex, _valueIndexLocal;
             // NOTE: Copying the bucket as we enter it means that concurrent modification during enumeration is completely safe;
             //  the old contents of the bucket will be observed instead of a mix of modified and unmodified bucket items, and
@@ -148,25 +148,25 @@ namespace SimdDictionary {
             private Bucket _currentBucket;
             private Bucket[] _buckets;
 
-            public K CurrentKey {
+            public TKey CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     return _currentBucket.Pairs[_valueIndexLocal].Key;
                 }
             }
 
-            public V CurrentValue {
+            public TValue CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     return _currentBucket.Pairs[_valueIndexLocal].Value;
                 }
             }
 
-            public KeyValuePair<K, V> Current {
+            public KeyValuePair<TKey, TValue> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     ref var pair = ref _currentBucket.Pairs[_valueIndexLocal];
-                    return new KeyValuePair<K, V>(pair.Key, pair.Value);
+                    return new KeyValuePair<TKey, TValue>(pair.Key, pair.Value);
                 }
             }
             object IEnumerator.Current => Current;
@@ -182,7 +182,7 @@ namespace SimdDictionary {
 
             object? IDictionaryEnumerator.Value => CurrentValue;
 
-            public Enumerator (VectorizedDictionary<K, V> dictionary) {
+            public Enumerator (VectorizedDictionary<TKey, TValue> dictionary) {
                 _bucketIndex = -1;
                 _valueIndexLocal = BucketSizeI;
                 _buckets = dictionary._Buckets;
@@ -229,29 +229,29 @@ namespace SimdDictionary {
             private ref Pair _currentPair;
             private Span<Bucket> _buckets;
 
-            public ref readonly K CurrentKey {
+            public ref readonly TKey CurrentKey {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     return ref _currentPair.Key;
                 }
             }
 
-            public ref readonly V CurrentValue {
+            public ref readonly TValue CurrentValue {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     return ref _currentPair.Value;
                 }
             }
 
-            public KeyValuePair<K, V> Current {
+            public KeyValuePair<TKey, TValue> Current {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
                 get {
                     ref var pair = ref _currentPair;
-                    return new KeyValuePair<K, V>(pair.Key, pair.Value);
+                    return new KeyValuePair<TKey, TValue>(pair.Key, pair.Value);
                 }
             }
 
-            public RefEnumerator (VectorizedDictionary<K, V> dictionary) {
+            public RefEnumerator (VectorizedDictionary<TKey, TValue> dictionary) {
                 _bucketIndex = -1;
                 _valueIndexLocal = BucketSizeI;
                 _buckets = dictionary._Buckets;
